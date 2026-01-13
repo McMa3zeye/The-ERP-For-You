@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from database import get_db
@@ -17,12 +18,14 @@ from email.message import EmailMessage
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
 # =========================================================
 # Time helpers (avoid naive/aware datetime comparison errors)
 # =========================================================
 def utcnow() -> datetime:
-    """Timezone-aware UTC now."""
+    """Timezone-aware UTC 'now'."""
     return datetime.now(timezone.utc)
+
 
 def ensure_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
     """Convert naive/aware datetime to aware UTC datetime (or None)."""
@@ -32,9 +35,11 @@ def ensure_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
+
 # #region agent log
 def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = ""):
     import time
+
     log_path = r"c:\Users\Afrit\Desktop\Omar\Project Money\Project Wood\.cursor\debug.log"
     entry = {
         "location": location,
@@ -48,42 +53,53 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-    except:
+    except Exception:
+        # Debug logging must never break production.
         pass
+
+
 # #endregion
 
+
 # Password hashing (using SHA-256 with salt - in production, use bcrypt)
-def hash_password(password: str, salt: str = None) -> tuple:
+def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     if salt is None:
         salt = secrets.token_hex(16)
     password_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
     return f"{salt}${password_hash}", salt
 
+
 def verify_password(password: str, stored_hash: str) -> bool:
     try:
-        salt, hash_value = stored_hash.split('$')
+        salt, hash_value = stored_hash.split("$", 1)
         new_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
         return new_hash == hash_value
-    except:
+    except Exception:
         return False
+
 
 def generate_session_token() -> str:
     return secrets.token_urlsafe(64)
 
+
 def get_client_info(request: Request) -> dict:
     return {
         "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("user-agent", "")[:500]
+        "user_agent": request.headers.get("user-agent", "")[:500],
     }
+
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+
 def _send_gmail_reset_email(to_email: str, reset_link: str):
-    """
-    Send reset email using Gmail SMTP.
+    """Send reset email using Gmail SMTP.
+
     Requires env var: GMAIL_APP_PASSWORD
+    Optional env var: GMAIL_USER
     """
+
     smtp_user = os.getenv("GMAIL_USER", "erpforyou.reset@gmail.com")
     smtp_pass = os.getenv("GMAIL_APP_PASSWORD", "")
     if not smtp_pass:
@@ -104,23 +120,34 @@ def _send_gmail_reset_email(to_email: str, reset_link: str):
         server.login(smtp_user, smtp_pass)
         server.send_message(msg)
 
+
 @router.post("/forgot-password", response_model=schemas.ForgotPasswordResponse)
 def forgot_password(payload: schemas.ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    """
-    Request password reset by email.
+    """Request password reset by email.
+
     Always returns a generic success message to avoid user enumeration.
     """
+
     try:
         email = (payload.email or "").strip().lower()
-        _debug_log("auth.py:forgot_password:entry", "Forgot password requested",
-                   {"email_domain": email.split("@")[-1] if "@" in email else ""}, "FP1")
+
+        _debug_log(
+            "auth.py:forgot_password:entry",
+            "Forgot password requested",
+            {"email_domain": email.split("@")[ -1] if "@" in email else ""},
+            "FP1",
+        )
 
         user = db.query(models.User).filter(models.User.email == email).first()
         generic = {"message": "If that email exists, a reset link has been sent."}
 
         if not user or not user.is_active:
-            _debug_log("auth.py:forgot_password:user", "User not found or inactive (generic response)",
-                       {"found": bool(user)}, "FP1")
+            _debug_log(
+                "auth.py:forgot_password:user",
+                "User not found or inactive (generic response)",
+                {"found": bool(user)},
+                "FP1",
+            )
             return generic
 
         raw_token = secrets.token_urlsafe(32)
@@ -128,12 +155,14 @@ def forgot_password(payload: schemas.ForgotPasswordRequest, request: Request, db
         expires_at = utcnow() + timedelta(minutes=60)
 
         client_ip = request.client.host if request.client else None
-        db.add(models.PasswordResetToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=expires_at,
-            request_ip=client_ip,
-        ))
+        db.add(
+            models.PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+                request_ip=client_ip,
+            )
+        )
         db.commit()
 
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -143,8 +172,13 @@ def forgot_password(payload: schemas.ForgotPasswordRequest, request: Request, db
             _send_gmail_reset_email(email, reset_link)
             _debug_log("auth.py:forgot_password:email", "Reset email sent", {"user_id": user.id}, "FP1")
         except Exception as e:
-            _debug_log("auth.py:forgot_password:email_error", "Reset email send failed",
-                       {"user_id": user.id, "error": str(e)[:180]}, "FP1")
+            # Still return generic response; log for debugging.
+            _debug_log(
+                "auth.py:forgot_password:email_error",
+                "Reset email send failed",
+                {"user_id": user.id, "error": str(e)[:180]},
+                "FP1",
+            )
 
         return generic
 
@@ -153,11 +187,11 @@ def forgot_password(payload: schemas.ForgotPasswordRequest, request: Request, db
         logger.error(f"Database error in forgot_password: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/reset-password", response_model=schemas.ResetPasswordResponse)
 def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    """
-    Reset password using a token emailed to the user.
-    """
+    """Reset password using a token emailed to the user."""
+
     token = (payload.token or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="Invalid token")
@@ -166,17 +200,23 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
 
     try:
         token_hash = _hash_token(token)
-        prt = db.query(models.PasswordResetToken).filter(
-            models.PasswordResetToken.token_hash == token_hash
-        ).first()
+        prt = (
+            db.query(models.PasswordResetToken)
+            .filter(models.PasswordResetToken.token_hash == token_hash)
+            .first()
+        )
 
-        # Use aware UTC for comparisons
-        now = utcnow()
+        now_utc = utcnow()
         prt_expires = ensure_aware_utc(prt.expires_at) if prt else None
+        prt_used_at = ensure_aware_utc(prt.used_at) if prt and prt.used_at else None
 
-        if not prt or prt.used_at is not None or (prt_expires and prt_expires <= now):
-            _debug_log("auth.py:reset_password:invalid", "Reset token invalid/used/expired",
-                       {"found": bool(prt)}, "FP2")
+        if (not prt) or (prt_used_at is not None) or (prt_expires and prt_expires <= now_utc):
+            _debug_log(
+                "auth.py:reset_password:invalid",
+                "Reset token invalid/used/expired",
+                {"found": bool(prt)},
+                "FP2",
+            )
             raise HTTPException(status_code=400, detail="Token is invalid or expired")
 
         user = db.query(models.User).filter(models.User.id == prt.user_id).first()
@@ -185,8 +225,8 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
 
         user.password_hash, _ = hash_password(payload.new_password)
         user.must_change_password = False
-        user.password_changed_at = now
-        prt.used_at = now
+        user.password_changed_at = now_utc
+        prt.used_at = now_utc
         db.commit()
 
         _debug_log("auth.py:reset_password:success", "Password reset success", {"user_id": user.id}, "FP2")
@@ -199,15 +239,20 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
         logger.error(f"Database error in reset_password: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/login", response_model=schemas.LoginResponse)
 def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depends(get_db)):
-    """Authenticate user and create session"""
+    """Authenticate user and create session."""
+
     try:
+        # Debug: log DB file only when SQLite
         db_file = None
         try:
-            rows = db.execute("PRAGMA database_list").fetchall()
-            if rows:
-                db_file = rows[0][2]
+            bind = db.get_bind()
+            if getattr(bind.dialect, "name", "") == "sqlite":
+                rows = db.execute(text("PRAGMA database_list")).fetchall()
+                if rows:
+                    db_file = rows[0][2]
         except Exception:
             db_file = None
 
@@ -218,29 +263,52 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
             "A,B,C,D",
         )
 
-        user = db.query(models.User).options(
-            joinedload(models.User.roles).joinedload(models.Role.permissions)
-        ).filter(
-            (models.User.username == login_data.username) |
-            (models.User.email == login_data.username)
-        ).first()
+        # Find user by username or email
+        user = (
+            db.query(models.User)
+            .options(joinedload(models.User.roles).joinedload(models.Role.permissions))
+            .filter(
+                (models.User.username == login_data.username)
+                | (models.User.email == login_data.username)
+            )
+            .first()
+        )
 
         if not user:
-            _debug_log("auth.py:login:user_lookup", "User not found", {"username": login_data.username}, "A,C")
-            log_audit(db, None, "login", "auth", status="failed",
-                      error_message="User not found", request=request)
+            _debug_log(
+                "auth.py:login:user_lookup",
+                "User not found",
+                {"username": login_data.username},
+                "A,C",
+            )
+            log_audit(
+                db,
+                None,
+                "login",
+                "auth",
+                status="failed",
+                error_message="User not found",
+                request=request,
+            )
+            # Persist audit log for unauthenticated attempts
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        now = utcnow()
+        now_utc = utcnow()
 
-        # Check if account is locked (normalize to aware UTC)
+        # Check if account is locked
         locked_until = ensure_aware_utc(user.locked_until)
-        if locked_until and locked_until > now:
+        if locked_until and locked_until > now_utc:
             raise HTTPException(status_code=403, detail="Account is temporarily locked")
 
+        # Check if account is active
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account is disabled")
 
+        # Verify password
         password_ok = verify_password(login_data.password, user.password_hash)
 
         _debug_log(
@@ -260,19 +328,28 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
         if not password_ok:
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
             if user.failed_login_attempts >= 5:
-                user.locked_until = now + timedelta(minutes=15)
+                user.locked_until = now_utc + timedelta(minutes=15)
+
+            log_audit(
+                db,
+                user.id,
+                "login",
+                "auth",
+                status="failed",
+                error_message="Invalid password",
+                request=request,
+            )
             db.commit()
-            log_audit(db, user.id, "login", "auth", status="failed",
-                      error_message="Invalid password", request=request)
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Reset failed attempts
         user.failed_login_attempts = 0
         user.locked_until = None
-        user.last_login = now
+        user.last_login = now_utc
 
+        # Create session
         client_info = get_client_info(request)
-        expires_at = now + timedelta(days=7 if login_data.remember_me else 1)
+        expires_at = now_utc + timedelta(days=7 if login_data.remember_me else 1)
         session_token = generate_session_token()
 
         session = models.UserSession(
@@ -280,9 +357,11 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
             session_token=session_token,
             ip_address=client_info["ip_address"],
             user_agent=client_info["user_agent"],
-            expires_at=expires_at
+            expires_at=expires_at,
         )
         db.add(session)
+
+        log_audit(db, user.id, "login", "auth", status="success", request=request)
         db.commit()
 
         _debug_log(
@@ -292,13 +371,11 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
             "B",
         )
 
-        log_audit(db, user.id, "login", "auth", status="success", request=request)
-
         return {
             "access_token": session_token,
             "token_type": "bearer",
             "expires_at": expires_at,
-            "user": user
+            "user": user,
         }
 
     except HTTPException:
@@ -308,18 +385,24 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
         logger.error(f"Database error during login: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
-    """Invalidate current session"""
+    """Invalidate current session."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not token:
             raise HTTPException(status_code=401, detail="No token provided")
 
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True
-        ).first()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+            )
+            .first()
+        )
 
         if session:
             session.is_active = False
@@ -335,22 +418,28 @@ def logout(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Database error during logout: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/logout-all")
 def logout_all_sessions(request: Request, db: Session = Depends(get_db)):
-    """Invalidate all sessions for current user"""
+    """Invalidate all sessions for current user."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True
-        ).first()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+            )
+            .first()
+        )
 
         if not session:
             raise HTTPException(status_code=401, detail="Invalid session")
 
-        db.query(models.UserSession).filter(
-            models.UserSession.user_id == session.user_id
-        ).update({"is_active": False})
+        db.query(models.UserSession).filter(models.UserSession.user_id == session.user_id).update(
+            {"is_active": False}
+        )
 
         log_audit(db, session.user_id, "logout_all", "auth", status="success", request=request)
         db.commit()
@@ -364,36 +453,47 @@ def logout_all_sessions(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.get("/me", response_model=schemas.AuthMeResponse)
 def get_current_user(request: Request, db: Session = Depends(get_db)):
-    """Get current authenticated user"""
+    """Get current authenticated user."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-        now = utcnow()
+        now_utc = utcnow()
 
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True,
-            models.UserSession.expires_at > now
-        ).first()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+                models.UserSession.expires_at > now_utc,
+            )
+            .first()
+        )
 
         if not session:
             raise HTTPException(status_code=401, detail="Session expired or invalid")
 
-        session.last_activity = now
+        # Update last activity
+        session.last_activity = now_utc
         db.commit()
 
-        user = db.query(models.User).options(
-            joinedload(models.User.roles).joinedload(models.Role.permissions)
-        ).filter(models.User.id == session.user_id).first()
+        user = (
+            db.query(models.User)
+            .options(joinedload(models.User.roles).joinedload(models.Role.permissions))
+            .filter(models.User.id == session.user_id)
+            .first()
+        )
 
         if not user or not user.is_active:
             raise HTTPException(status_code=401, detail="User not found or disabled")
 
-        permissions = []
+        # Flatten permissions for the frontend
+        permissions: list[str] = []
         try:
             if user.roles:
                 perm_set = set()
@@ -415,24 +515,32 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/change-password")
 def change_password(
     password_data: schemas.UserPasswordChange,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Change password for current user"""
+    """Change password for current user."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True
-        ).first()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+            )
+            .first()
+        )
 
         if not session:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
         user = db.query(models.User).filter(models.User.id == session.user_id).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
 
         if not verify_password(password_data.current_password, user.password_hash):
             raise HTTPException(status_code=400, detail="Current password is incorrect")
@@ -440,9 +548,9 @@ def change_password(
         if len(password_data.new_password) < 8:
             raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
-        now = utcnow()
+        now_utc = utcnow()
         user.password_hash, _ = hash_password(password_data.new_password)
-        user.password_changed_at = now
+        user.password_changed_at = now_utc
         user.must_change_password = False
 
         log_audit(db, user.id, "change_password", "auth", status="success", request=request)
@@ -457,26 +565,36 @@ def change_password(
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.get("/sessions", response_model=schemas.UserSessionList)
 def get_my_sessions(request: Request, db: Session = Depends(get_db)):
-    """Get all active sessions for current user"""
+    """Get all active sessions for current user."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True
-        ).first()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+            )
+            .first()
+        )
 
         if not session:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-        now = utcnow()
-
-        sessions = db.query(models.UserSession).filter(
-            models.UserSession.user_id == session.user_id,
-            models.UserSession.is_active == True,
-            models.UserSession.expires_at > now
-        ).order_by(models.UserSession.last_activity.desc()).all()
+        now_utc = utcnow()
+        sessions = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.user_id == session.user_id,
+                models.UserSession.is_active == True,
+                models.UserSession.expires_at > now_utc,
+            )
+            .order_by(models.UserSession.last_activity.desc())
+            .all()
+        )
 
         return {"items": sessions, "total": len(sessions)}
 
@@ -486,23 +604,33 @@ def get_my_sessions(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.delete("/sessions/{session_id}")
 def revoke_session(session_id: int, request: Request, db: Session = Depends(get_db)):
-    """Revoke a specific session"""
+    """Revoke a specific session."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        current_session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True
-        ).first()
+        current_session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+            )
+            .first()
+        )
 
         if not current_session:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-        target_session = db.query(models.UserSession).filter(
-            models.UserSession.id == session_id,
-            models.UserSession.user_id == current_session.user_id
-        ).first()
+        target_session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.id == session_id,
+                models.UserSession.user_id == current_session.user_id,
+            )
+            .first()
+        )
 
         if not target_session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -519,21 +647,26 @@ def revoke_session(session_id: int, request: Request, db: Session = Depends(get_
         logger.error(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Database error")
 
+
 @router.post("/verify")
 def verify_token(request: Request, db: Session = Depends(get_db)):
-    """Verify if current token is valid"""
+    """Verify if current token is valid."""
+
     try:
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not token:
             return {"valid": False, "message": "No token provided"}
 
-        now = utcnow()
-
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_token == token,
-            models.UserSession.is_active == True,
-            models.UserSession.expires_at > now
-        ).first()
+        now_utc = utcnow()
+        session = (
+            db.query(models.UserSession)
+            .filter(
+                models.UserSession.session_token == token,
+                models.UserSession.is_active == True,
+                models.UserSession.expires_at > now_utc,
+            )
+            .first()
+        )
 
         if session:
             return {"valid": True, "expires_at": session.expires_at}
@@ -543,12 +676,22 @@ def verify_token(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Database error: {e}")
         return {"valid": False, "message": "Error verifying token"}
 
-def log_audit(db: Session, user_id: int, action: str, module: str,
-              entity_type: str = None, entity_id: int = None,
-              old_values: dict = None, new_values: dict = None,
-              status: str = "success", error_message: str = None,
-              request: Request = None):
-    """Helper function to create audit log entries"""
+
+def log_audit(
+    db: Session,
+    user_id: Optional[int],
+    action: str,
+    module: str,
+    entity_type: str = None,
+    entity_id: int = None,
+    old_values: dict = None,
+    new_values: dict = None,
+    status: str = "success",
+    error_message: str = None,
+    request: Request = None,
+):
+    """Helper function to create audit log entries."""
+
     try:
         client_info = get_client_info(request) if request else {}
 
@@ -563,8 +706,9 @@ def log_audit(db: Session, user_id: int, action: str, module: str,
             ip_address=client_info.get("ip_address"),
             user_agent=client_info.get("user_agent"),
             status=status,
-            error_message=error_message
+            error_message=error_message,
         )
         db.add(audit)
+        # Caller is responsible for commit.
     except Exception as e:
         logger.error(f"Error creating audit log: {e}")
