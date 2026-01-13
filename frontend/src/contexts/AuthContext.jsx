@@ -68,10 +68,6 @@ export function AuthProvider({ children }) {
       body.append('client_id', '')
       body.append('client_secret', '')
 
-
-      // If your backend reads remember_me from the form too, include it:
-      body.append('remember_me', rememberMe ? 'true' : 'false')
-
       // Ensure we don't send an old token to login
       if (api.defaults.headers.common['Authorization']) {
         delete api.defaults.headers.common['Authorization']
