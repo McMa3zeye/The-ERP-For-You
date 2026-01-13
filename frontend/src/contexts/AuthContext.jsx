@@ -8,6 +8,16 @@ export function useAuth() {
   return useContext(AuthContext)
 }
 
+const toErrorString = (error) => {
+  const detail = error?.response?.data?.detail ?? error?.response?.data ?? error?.message
+  if (typeof detail === 'string') return detail
+  try {
+    return JSON.stringify(detail)
+  } catch {
+    return 'Login failed'
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -44,7 +54,6 @@ export function AuthProvider({ children }) {
       try {
         setUser(JSON.parse(savedUser))
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-        // Verify session is still valid
         verifySession()
       } catch {
         logout()
@@ -56,22 +65,51 @@ export function AuthProvider({ children }) {
 
   const login = async (username, password, rememberMe = false) => {
     try {
-      // IMPORTANT:
-      // Many FastAPI login endpoints use OAuth2PasswordRequestForm,
-      // which expects application/x-www-form-urlencoded, NOT JSON.
+      // Don’t send any stale token to /auth/login
+      delete api.defaults.headers.common['Authorization']
+
+      // 1) Try JSON first (matches many custom login endpoints)
+      try {
+        const response = await api.post('/auth/login', {
+          username,
+          password,
+          remember_me: rememberMe
+        })
+
+        const { access_token, user: userData } = response.data
+
+        localStorage.setItem('auth_token', access_token)
+        localStorage.setItem('auth_user', JSON.stringify(userData))
+        api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+
+        setUser(userData)
+
+        try {
+          const permResponse = await api.get('/auth/me')
+          setPermissions(permResponse.data.permissions || [])
+        } catch {
+          setPermissions([])
+        }
+
+        return { success: true }
+      } catch (err) {
+        // If it’s not a validation error, bubble it up
+        if (err?.response?.status !== 422) throw err
+      }
+
+      // 2) Retry as x-www-form-urlencoded (OAuth2PasswordRequestForm style)
       const body = new URLSearchParams()
       body.append('username', username)
       body.append('password', password)
-      // OPTIONAL but sometimes expected by some implementations:
+
+      // Common optional fields (safe even if ignored)
       body.append('grant_type', '')
       body.append('scope', '')
       body.append('client_id', '')
       body.append('client_secret', '')
 
-      // Ensure we don't send an old token to login
-      if (api.defaults.headers.common['Authorization']) {
-        delete api.defaults.headers.common['Authorization']
-      }
+      // If your backend reads remember_me from the form, include it (ignored otherwise)
+      body.append('remember_me', rememberMe ? 'true' : 'false')
 
       const response = await api.post('/auth/login', body, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -79,16 +117,12 @@ export function AuthProvider({ children }) {
 
       const { access_token, user: userData } = response.data
 
-      // Store token (you currently always use localStorage)
       localStorage.setItem('auth_token', access_token)
       localStorage.setItem('auth_user', JSON.stringify(userData))
-
-      // Set auth header for future requests
       api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
 
       setUser(userData)
 
-      // Load permissions
       try {
         const permResponse = await api.get('/auth/me')
         setPermissions(permResponse.data.permissions || [])
@@ -107,7 +141,7 @@ export function AuthProvider({ children }) {
 
       return {
         success: false,
-        error: error.response?.data?.detail || 'Login failed'
+        error: toErrorString(error)
       }
     }
   }
@@ -180,7 +214,7 @@ function AccessDenied() {
       }}
     >
       <h2>⛔ Access Denied</h2>
-      <p>You don't have permission to access this page.</p>
+      <p>You don&apos;t have permission to access this page.</p>
     </div>
   )
 }
