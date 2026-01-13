@@ -65,6 +65,7 @@ PUBLIC_PATH_PREFIXES = (
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/admin/bootstrap-owner",  # bootstrap endpoint (see handler for behavior)
+    "/api/settings/company/info",
 )
 
 # Path prefix → module key used by permissions table
@@ -127,6 +128,8 @@ def _required_permission_for_path(path: str, method: str) -> str | None:
     if path.startswith("/api/admin/audit-logs"):
         return "admin.view_audit"
     if path.startswith("/api/admin/settings"):
+        return "settings.manage"
+    if path.startswith("/api/settings"):
         return "settings.manage"
 
     # Other endpoints: module.method mapping
