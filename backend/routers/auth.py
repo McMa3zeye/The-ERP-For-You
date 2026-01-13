@@ -125,7 +125,7 @@ def forgot_password(payload: schemas.ForgotPasswordRequest, request: Request, db
 
         raw_token = secrets.token_urlsafe(32)
         token_hash = _hash_token(raw_token)
-        expires_at = now(timezone.utc) + timedelta(minutes=60)
+        expires_at = utcnow() + timedelta(minutes=60)
 
         client_ip = request.client.host if request.client else None
         db.add(models.PasswordResetToken(
@@ -171,7 +171,7 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
         ).first()
 
         # Use aware UTC for comparisons
-        now = now(timezone.utc)
+        now = utcnow()
         prt_expires = ensure_aware_utc(prt.expires_at) if prt else None
 
         if not prt or prt.used_at is not None or (prt_expires and prt_expires <= now):
@@ -231,7 +231,7 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
                       error_message="User not found", request=request)
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        now = now(timezone.utc)
+        now = utcnow()
 
         # Check if account is locked (normalize to aware UTC)
         locked_until = ensure_aware_utc(user.locked_until)
@@ -372,7 +372,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-        now = now(timezone.utc)
+        now = utcnow()
 
         session = db.query(models.UserSession).filter(
             models.UserSession.session_token == token,
@@ -440,7 +440,7 @@ def change_password(
         if len(password_data.new_password) < 8:
             raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
-        now = now(timezone.utc)
+        now = utcnow()
         user.password_hash, _ = hash_password(password_data.new_password)
         user.password_changed_at = now
         user.must_change_password = False
@@ -470,7 +470,7 @@ def get_my_sessions(request: Request, db: Session = Depends(get_db)):
         if not session:
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-        now = now(timezone.utc)
+        now = utcnow()
 
         sessions = db.query(models.UserSession).filter(
             models.UserSession.user_id == session.user_id,
@@ -527,7 +527,7 @@ def verify_token(request: Request, db: Session = Depends(get_db)):
         if not token:
             return {"valid": False, "message": "No token provided"}
 
-        now = now(timezone.utc)
+        now = utcnow()
 
         session = db.query(models.UserSession).filter(
             models.UserSession.session_token == token,
