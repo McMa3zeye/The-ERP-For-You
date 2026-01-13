@@ -40,7 +40,7 @@ def create_backup(
 ):
     """Create a database backup (SQLite copy)"""
     try:
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_filename = f"backup_{timestamp}.db"
         backup_path = os.path.join(BACKUP_DIR, backup_filename)
         
@@ -59,7 +59,7 @@ def create_backup(
             "created_by": current_user.username,
             "description": description or "Manual backup",
             "file_size": file_size,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat()
         }
         
         metadata_path = backup_path.replace(".db", ".json")
@@ -189,7 +189,7 @@ def restore_backup(
     
     try:
         # First, create a backup of current state
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         pre_restore_backup = os.path.join(BACKUP_DIR, f"pre_restore_{timestamp}.db")
         
         db.close()
@@ -223,7 +223,7 @@ def cleanup_old_backups(
 ):
     """Delete backups older than retention period"""
     try:
-        cutoff = datetime.utcnow().timestamp() - (retention_days * 24 * 60 * 60)
+        cutoff = datetime.now(timezone.utc).timestamp() - (retention_days * 24 * 60 * 60)
         deleted = []
         
         for filename in os.listdir(BACKUP_DIR):
