@@ -41,7 +41,7 @@ app = FastAPI(
 # Get allowed origins from environment or use defaults
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000"
+    "https://the-erp-for-you.vercel.app,http://localhost:5173,http://localhost:3000"
 ).split(",")
 
 # CORS middleware to allow React frontend to connect
