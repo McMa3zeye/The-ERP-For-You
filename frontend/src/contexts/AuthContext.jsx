@@ -62,6 +62,12 @@ export function AuthProvider({ children }) {
       const body = new URLSearchParams()
       body.append('username', username)
       body.append('password', password)
+      // OPTIONAL but sometimes expected by some implementations:
+      body.append('grant_type', '')
+      body.append('scope', '')
+      body.append('client_id', '')
+      body.append('client_secret', '')
+
 
       // If your backend reads remember_me from the form too, include it:
       body.append('remember_me', rememberMe ? 'true' : 'false')
