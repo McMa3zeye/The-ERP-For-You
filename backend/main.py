@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from dotenv import load_dotenv
