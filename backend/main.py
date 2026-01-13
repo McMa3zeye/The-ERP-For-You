@@ -175,7 +175,7 @@ async def authz_middleware(request: Request, call_next):
         session = db.query(models.UserSession).filter(
             models.UserSession.session_token == token,
             models.UserSession.is_active == True,
-            models.UserSession.expires_at > datetime.utcnow(),
+            models.UserSession.expires_at > datetime.now(timezone.utc),
         ).first()
         if not session:
             return JSONResponse(status_code=401, content={"detail": "Session expired or invalid"})
