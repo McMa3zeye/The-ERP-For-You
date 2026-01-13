@@ -20,7 +20,7 @@ router = APIRouter()
 # =========================================================
 # Time helpers (avoid naive/aware datetime comparison errors)
 # =========================================================
-def now(timezone.utc) -> datetime:
+def utcnow() -> datetime:
     """Timezone-aware UTC now."""
     return datetime.now(timezone.utc)
 
