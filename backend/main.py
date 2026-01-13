@@ -154,6 +154,10 @@ async def authz_middleware(request: Request, call_next):
     # Only protect API routes; let frontend/static/dev server handle others.
     if not path.startswith("/api/"):
         return await call_next(request)
+        
+    # Always let preflight through
+    if request.method == "OPTIONS":
+        return await call_next(request)
 
     # Public endpoints
     if path.startswith(PUBLIC_PATH_PREFIXES):
