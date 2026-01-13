@@ -13,11 +13,33 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const [permissions, setPermissions] = useState([])
 
+  const logout = useCallback(async () => {
+    try {
+      await api.post('/auth/logout')
+    } catch {}
+
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('auth_user')
+    delete api.defaults.headers.common['Authorization']
+    setUser(null)
+    setPermissions([])
+  }, [])
+
+  const verifySession = useCallback(async () => {
+    try {
+      const response = await api.get('/auth/me')
+      setUser(response.data.user)
+      setPermissions(response.data.permissions || [])
+    } catch {
+      logout()
+    }
+  }, [logout])
+
   // Check for existing session on mount
   useEffect(() => {
     const token = localStorage.getItem('auth_token')
     const savedUser = localStorage.getItem('auth_user')
-    
+
     if (token && savedUser) {
       try {
         setUser(JSON.parse(savedUser))
@@ -28,76 +50,83 @@ export function AuthProvider({ children }) {
         logout()
       }
     }
-    setLoading(false)
-  }, [])
 
-  const verifySession = async () => {
-    try {
-      const response = await api.get('/auth/me')
-      setUser(response.data.user)
-      setPermissions(response.data.permissions || [])
-    } catch {
-      logout()
-    }
-  }
+    setLoading(false)
+  }, [verifySession, logout])
 
   const login = async (username, password, rememberMe = false) => {
     try {
-      const response = await api.post('/auth/login', {
-        username,
-        password,
-        remember_me: rememberMe
+      // IMPORTANT:
+      // Many FastAPI login endpoints use OAuth2PasswordRequestForm,
+      // which expects application/x-www-form-urlencoded, NOT JSON.
+      const body = new URLSearchParams()
+      body.append('username', username)
+      body.append('password', password)
+
+      // If your backend reads remember_me from the form too, include it:
+      body.append('remember_me', rememberMe ? 'true' : 'false')
+
+      // Ensure we don't send an old token to login
+      if (api.defaults.headers.common['Authorization']) {
+        delete api.defaults.headers.common['Authorization']
+      }
+
+      const response = await api.post('/auth/login', body, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       })
-      
+
       const { access_token, user: userData } = response.data
-      
-      // Store token
+
+      // Store token (you currently always use localStorage)
       localStorage.setItem('auth_token', access_token)
       localStorage.setItem('auth_user', JSON.stringify(userData))
-      
-      // Set auth header
+
+      // Set auth header for future requests
       api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-      
+
       setUser(userData)
-      
+
       // Load permissions
       try {
         const permResponse = await api.get('/auth/me')
         setPermissions(permResponse.data.permissions || [])
-      } catch {}
-      
+      } catch {
+        setPermissions([])
+      }
+
       return { success: true }
     } catch (error) {
-      return { 
-        success: false, 
-        error: error.response?.data?.detail || 'Login failed' 
+      // Clean up any partial state
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_user')
+      delete api.defaults.headers.common['Authorization']
+      setUser(null)
+      setPermissions([])
+
+      return {
+        success: false,
+        error: error.response?.data?.detail || 'Login failed'
       }
     }
   }
 
-  const logout = useCallback(async () => {
-    try {
-      await api.post('/auth/logout')
-    } catch {}
-    
-    localStorage.removeItem('auth_token')
-    localStorage.removeItem('auth_user')
-    delete api.defaults.headers.common['Authorization']
-    setUser(null)
-    setPermissions([])
-  }, [])
+  const hasPermission = useCallback(
+    (permissionCode) => {
+      if (!user) return false
+      if (user.is_superuser) return true
+      return permissions.includes(permissionCode)
+    },
+    [user, permissions]
+  )
 
-  const hasPermission = useCallback((permissionCode) => {
-    if (!user) return false
-    if (user.is_superuser) return true
-    return permissions.includes(permissionCode)
-  }, [user, permissions])
-
-  const hasAnyPermission = useCallback((permissionCodes) => {
-    if (!user) return false
-    if (user.is_superuser) return true
-    return permissionCodes.some(code => permissions.includes(code))
-  }, [user, permissions])
+  const hasAnyPermission = useCallback(
+    (permissionCodes) => {
+      if (!user) return false
+      if (user.is_superuser) return true
+      return permissionCodes.some((code) => permissions.includes(code))
+    },
+    [user, permissions]
+  )
 
   const value = {
     user,
@@ -111,11 +140,7 @@ export function AuthProvider({ children }) {
     isSuperuser: user?.is_superuser || false
   }
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  )
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 // Protected Route component
@@ -141,15 +166,17 @@ export function RequireAuth({ children, permission, fallback = null }) {
 
 function AccessDenied() {
   return (
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      minHeight: '400px',
-      flexDirection: 'column',
-      gap: '1rem',
-      color: 'var(--red-400)'
-    }}>
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '400px',
+        flexDirection: 'column',
+        gap: '1rem',
+        color: 'var(--red-400)'
+      }}
+    >
       <h2>⛔ Access Denied</h2>
       <p>You don't have permission to access this page.</p>
     </div>
