@@ -135,7 +135,7 @@ function Navigation() {
   return (
     <nav>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <h1 style={{ fontSize: '1.5rem', margin: 0 }}>🪵 Wood ERP System</h1>
+        <h1 style={{ fontSize: '1.5rem', margin: 0 }}>The ERP For You</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <ul>
             {favoritePages.map(page => (
