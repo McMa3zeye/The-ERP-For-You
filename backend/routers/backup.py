@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime
 import os
 import shutil
 import json

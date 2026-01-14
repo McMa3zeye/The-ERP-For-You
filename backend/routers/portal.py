@@ -14,21 +14,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def hash_password(password: str, salt: str = None) -> str:
-    if salt is None:
-        salt = secrets.token_hex(16)
-    password_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return f"{salt}${password_hash}"
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    try:
-        salt, hash_value = stored_hash.split('$')
-        new_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-        return new_hash == hash_value
-    except:
-        return False
-
 
 def generate_session_token() -> str:
     return secrets.token_urlsafe(64)

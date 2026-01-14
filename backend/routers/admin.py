@@ -9,6 +9,7 @@ import schemas
 import logging
 import secrets
 import hashlib
+from security import hash_password
 import json
 
 logger = logging.getLogger(__name__)
@@ -28,13 +29,6 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "")
         print(f"[DEBUG LOG ERROR] {e}")
 # #endregion
 router = APIRouter()
-
-# Password hashing helper
-def hash_password(password: str, salt: str = None) -> str:
-    if salt is None:
-        salt = secrets.token_hex(16)
-    password_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return f"{salt}${password_hash}"
 
 
 def _ensure_admin_role_with_all_permissions(db: Session) -> models.Role:

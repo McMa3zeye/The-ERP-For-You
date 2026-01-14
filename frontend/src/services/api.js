@@ -13,7 +13,8 @@ api.interceptors.request.use(
   (config) => {
     // Log request in development
     if (import.meta.env.DEV) {
-      console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`, config.params || config.data)
+      const method = (config.method || 'GET').toUpperCase();
+      console.log(`API Request: ${method} ${config.url || ''}`, config.params || config.data)
     }
     return config
   },

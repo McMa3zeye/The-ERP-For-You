@@ -29,16 +29,13 @@ def get_all_settings(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all system settings (non-sensitive or all if admin)"""
+    """Get all system settings (public or all if admin)"""
     try:
         query = db.query(models.SystemSetting)
         
-         # Non-superusers only see non-sensitive settings
-        if not current_user.is_superuser:
-            query = query.filter(models.SystemSetting.is_sensitive == False)
-        # Superusers can optionally hide sensitive settings unless requested
-        elif not include_private:
-            query = query.filter(models.SystemSetting.is_sensitive == False)
+        # Non-superusers only see public settings
+        if not current_user.is_superuser and not include_private:
+            query = query.filter(models.SystemSetting.is_public == True)
         
         settings = query.order_by(models.SystemSetting.key).all()
         
@@ -47,19 +44,19 @@ def get_all_settings(
         for s in settings:
             value = s.value
             # Parse JSON values
-            if s.value_type == "json" and value:
+            if s.data_type == "json" and value:
                 try:
                     value = json.loads(value)
                 except:
                     pass
-            elif s.value_type in ("integer", "int") and value:
+            elif s.data_type == "integer" and value:
                 try:
                     value = int(value)
                 except:
                     pass
-            elif s.value_type == "boolean" and value:
+            elif s.data_type == "boolean" and value:
                 value = value.lower() in ("true", "1", "yes")
-            elif s.value_type in ("float", "number") and value:
+            elif s.data_type == "float" and value:
                 try:
                     value = float(value)
                 except:
@@ -88,7 +85,7 @@ def get_setting(
         raise HTTPException(status_code=404, detail="Setting not found")
     
     # Check access
-    if setting.is_sensitive and not current_user.is_superuser:
+    if not setting.is_public and not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Access denied")
     
     return setting
@@ -132,9 +129,8 @@ def create_setting(
     key: str,
     value: str,
     description: Optional[str] = None,
-    value_type: str = "string",
-    category: str = "general",
-    is_sensitive: bool = False,
+    data_type: str = "string",
+    is_public: bool = False,
     current_user: models.User = Depends(require_superuser),
     db: Session = Depends(get_db)
 ):
@@ -150,9 +146,8 @@ def create_setting(
             key=key,
             value=value,
             description=description,
-            value_type=value_type,
-            category=category,
-            is_sensitive=is_sensitive
+            data_type=data_type,
+            is_public=is_public
         )
         db.add(setting)
         db.commit()
@@ -186,50 +181,50 @@ def initialize_company_settings(
     try:
         default_settings = [
             # Company Info
-            {"key": "company.name", "value": company_name, "description": "Company name", "is_sensitive": False, "category": "company"},
-            {"key": "company.address", "value": company_address or "", "description": "Company address", "is_sensitive": False, "category": "company"},
-            {"key": "company.phone", "value": company_phone or "", "description": "Company phone", "is_sensitive": False, "category": "company"},
-            {"key": "company.email", "value": company_email or "", "description": "Company email", "is_sensitive": False, "category": "company"},
-            {"key": "company.logo_url", "value": "", "description": "Company logo URL", "is_sensitive": False, "category": "company"},
-           
+            {"key": "company.name", "value": company_name, "description": "Company name", "is_public": True},
+            {"key": "company.address", "value": company_address or "", "description": "Company address", "is_public": True},
+            {"key": "company.phone", "value": company_phone or "", "description": "Company phone", "is_public": True},
+            {"key": "company.email", "value": company_email or "", "description": "Company email", "is_public": True},
+            {"key": "company.logo_url", "value": "", "description": "Company logo URL", "is_public": True},
+            
             # Financial
-            {"key": "finance.currency", "value": currency, "description": "Default currency code", "is_sensitive": False, "category": "finance"},
-            {"key": "finance.currency_symbol", "value": currency_symbol, "description": "Currency symbol", "is_sensitive": False, "category": "finance"},
-            {"key": "finance.tax_rate", "value": str(tax_rate), "value_type": "number", "description": "Default tax rate (%)", "is_sensitive": False, "category": "finance"},
-            {"key": "finance.fiscal_year_start", "value": fiscal_year_start, "description": "Fiscal year start (MM-DD)", "is_sensitive": True, "category": "finance"},
-            {"key": "finance.payment_terms_days", "value": "30", "value_type": "integer", "description": "Default payment terms", "is_sensitive": True, "category": "finance"},
+            {"key": "finance.currency", "value": currency, "description": "Default currency code", "is_public": True},
+            {"key": "finance.currency_symbol", "value": currency_symbol, "description": "Currency symbol", "is_public": True},
+            {"key": "finance.tax_rate", "value": str(tax_rate), "data_type": "float", "description": "Default tax rate (%)", "is_public": True},
+            {"key": "finance.fiscal_year_start", "value": fiscal_year_start, "description": "Fiscal year start (MM-DD)", "is_public": False},
+            {"key": "finance.payment_terms_days", "value": "30", "data_type": "integer", "description": "Default payment terms", "is_public": False},
             
             # Inventory
-            {"key": "inventory.costing_method", "value": "average", "description": "Inventory costing method (average, fifo, lifo)", "is_sensitive": True, "category": "inventory"},
-            {"key": "inventory.low_stock_threshold", "value": "10", "value_type": "integer", "description": "Default low stock alert threshold", "is_sensitive": True, "category": "inventory"},
-            {"key": "inventory.allow_negative", "value": "false", "value_type": "boolean", "description": "Allow negative inventory", "is_sensitive": True, "category": "inventory"},
+            {"key": "inventory.costing_method", "value": "average", "description": "Inventory costing method (average, fifo, lifo)", "is_public": False},
+            {"key": "inventory.low_stock_threshold", "value": "10", "data_type": "integer", "description": "Default low stock alert threshold", "is_public": False},
+            {"key": "inventory.allow_negative", "value": "false", "data_type": "boolean", "description": "Allow negative inventory", "is_public": False},
             
             # Orders
-            {"key": "orders.require_approval", "value": "false", "value_type": "boolean", "description": "Require approval for orders over threshold", "is_sensitive": True, "category": "orders"},
-            {"key": "orders.approval_threshold", "value": "10000", "value_type": "number", "description": "Order amount requiring approval", "is_sensitive": True, "category": "orders"},
-            {"key": "orders.auto_generate_invoice", "value": "false", "value_type": "boolean", "description": "Auto-generate invoice on shipment", "is_sensitive": True, "category": "orders"},
+            {"key": "orders.require_approval", "value": "false", "data_type": "boolean", "description": "Require approval for orders over threshold", "is_public": False},
+            {"key": "orders.approval_threshold", "value": "10000", "data_type": "float", "description": "Order amount requiring approval", "is_public": False},
+            {"key": "orders.auto_generate_invoice", "value": "false", "data_type": "boolean", "description": "Auto-generate invoice on shipment", "is_public": False},
             
             # Formatting
-            {"key": "format.date", "value": date_format, "description": "Date format", "is_sensitive": False, "category": "format"},
-            {"key": "format.decimal_places", "value": "2", "value_type": "integer", "description": "Decimal places for money", "is_sensitive": False, "category": "format"},
+            {"key": "format.date", "value": date_format, "description": "Date format", "is_public": True},
+            {"key": "format.decimal_places", "value": "2", "data_type": "integer", "description": "Decimal places for money", "is_public": True},
             
             # Security
-            {"key": "security.session_timeout_minutes", "value": "480", "value_type": "integer", "description": "Session timeout in minutes", "is_sensitive": True, "category": "security"},
-            {"key": "security.max_login_attempts", "value": "5", "value_type": "integer", "description": "Max failed login attempts before lockout", "is_sensitive": True, "category": "security"},
-            {"key": "security.lockout_duration_minutes", "value": "30", "value_type": "integer", "description": "Account lockout duration", "is_sensitive": True, "category": "security"},
-            {"key": "security.password_min_length", "value": "8", "value_type": "integer", "description": "Minimum password length", "is_sensitive": True, "category": "security"},
+            {"key": "security.session_timeout_minutes", "value": "480", "data_type": "integer", "description": "Session timeout in minutes", "is_public": False},
+            {"key": "security.max_login_attempts", "value": "5", "data_type": "integer", "description": "Max failed login attempts before lockout", "is_public": False},
+            {"key": "security.lockout_duration_minutes", "value": "30", "data_type": "integer", "description": "Account lockout duration", "is_public": False},
+            {"key": "security.password_min_length", "value": "8", "data_type": "integer", "description": "Minimum password length", "is_public": False},
             
             # Notifications
-            {"key": "notifications.email_enabled", "value": "false", "value_type": "boolean", "description": "Enable email notifications", "is_sensitive": True, "category": "notifications"},
-            {"key": "notifications.smtp_host", "value": "", "description": "SMTP server host", "is_sensitive": True, "category": "notifications"},
-            {"key": "notifications.smtp_port", "value": "587", "value_type": "integer", "description": "SMTP server port", "is_sensitive": True, "category": "notifications"},
-            {"key": "notifications.smtp_user", "value": "", "description": "SMTP username", "is_sensitive": True, "category": "notifications"},
-            {"key": "notifications.smtp_password", "value": "", "description": "SMTP password (encrypted)", "is_sensitive": True, "category": "notifications"},
-            {"key": "notifications.from_email", "value": "", "description": "From email address", "is_sensitive": True, "category": "notifications"},
+            {"key": "notifications.email_enabled", "value": "false", "data_type": "boolean", "description": "Enable email notifications", "is_public": False},
+            {"key": "notifications.smtp_host", "value": "", "description": "SMTP server host", "is_public": False},
+            {"key": "notifications.smtp_port", "value": "587", "data_type": "integer", "description": "SMTP server port", "is_public": False},
+            {"key": "notifications.smtp_user", "value": "", "description": "SMTP username", "is_public": False},
+            {"key": "notifications.smtp_password", "value": "", "description": "SMTP password (encrypted)", "is_public": False},
+            {"key": "notifications.from_email", "value": "", "description": "From email address", "is_public": False},
             
             # Backup
-            {"key": "backup.auto_enabled", "value": "true", "value_type": "boolean", "description": "Enable automatic backups", "is_sensitive": True, "category": "backup"},
-            {"key": "backup.retention_days", "value": "30", "value_type": "integer", "description": "Backup retention period", "is_sensitive": True, "category": "backup"},
+            {"key": "backup.auto_enabled", "value": "true", "data_type": "boolean", "description": "Enable automatic backups", "is_public": False},
+            {"key": "backup.retention_days", "value": "30", "data_type": "integer", "description": "Backup retention period", "is_public": False},
         ]
         
         created = 0
@@ -261,7 +256,7 @@ def get_company_info(db: Session = Depends(get_db)):
     try:
         settings = db.query(models.SystemSetting).filter(
             models.SystemSetting.key.like("company.%"),
-            models.SystemSetting.is_sensitive == False
+            models.SystemSetting.is_public == True
         ).all()
         
         result = {}

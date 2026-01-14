@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 import os
 from dotenv import load_dotenv
@@ -39,10 +39,20 @@ app = FastAPI(
 )
 
 # Get allowed origins from environment or use defaults
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "https://the-erp-for-you.vercel.app,http://localhost:5173,http://localhost:3000"
-).split(",")
+# Build allowed origins (CORS) from env, with safe defaults.
+# - In production set ALLOWED_ORIGINS on Render to your Vercel domain, e.g.
+#   https://the-erp-for-you.vercel.app
+frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+default_origins = ["http://localhost:5173", "http://localhost:3000"]
+if frontend_url:
+    default_origins.append(frontend_url)
+
+env_origins = os.getenv("ALLOWED_ORIGINS", "").strip()
+if env_origins:
+    ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in env_origins.split(",") if o.strip()]
+else:
+    ALLOWED_ORIGINS = default_origins
+
 
 # CORS middleware to allow React frontend to connect
 app.add_middleware(
@@ -65,7 +75,6 @@ PUBLIC_PATH_PREFIXES = (
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/admin/bootstrap-owner",  # bootstrap endpoint (see handler for behavior)
-    "/api/settings/company/info",
 )
 
 # Path prefix → module key used by permissions table
@@ -128,8 +137,6 @@ def _required_permission_for_path(path: str, method: str) -> str | None:
     if path.startswith("/api/admin/audit-logs"):
         return "admin.view_audit"
     if path.startswith("/api/admin/settings"):
-        return "settings.manage"
-    if path.startswith("/api/settings"):
         return "settings.manage"
 
     # Other endpoints: module.method mapping
