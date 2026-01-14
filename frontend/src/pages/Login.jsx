@@ -23,7 +23,7 @@ export default function Login() {
     try {
       const res = await login(username, password, rememberMe)
       if (!res.success) {
-        setError(res.error || 'Login failed')
+        setError(String(res.error || 'Login failed'))
         return
       }
       navigate(from, { replace: true })

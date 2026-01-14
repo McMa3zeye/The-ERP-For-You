@@ -4,7 +4,7 @@ Used across all routers to enforce security
 """
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import json
 import logging
@@ -13,6 +13,21 @@ from database import get_db
 import models
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# Time helpers (avoid naive/aware datetime comparison errors)
+# =========================================================
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def ensure_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 # =====================================================
@@ -44,11 +59,13 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
     
-    # Find valid session
-    session = db.query(models.Session).filter(
-        models.Session.token == token,
-        models.Session.is_active == True,
-        models.Session.expires_at > datetime.utcnow()
+    now = utcnow()
+
+    # Find valid session (ERP uses UserSession/session_token)
+    session = db.query(models.UserSession).filter(
+        models.UserSession.session_token == token,
+        models.UserSession.is_active == True,
+        models.UserSession.expires_at > now
     ).first()
     
     if not session:
@@ -70,15 +87,16 @@ def get_current_user(
             detail="User not found or disabled"
         )
     
-    # Check if user is locked out
-    if user.lockout_until and user.lockout_until > datetime.utcnow():
+    # Check if user is locked out (ERP field name: locked_until)
+    locked_until = ensure_aware_utc(getattr(user, "locked_until", None))
+    if locked_until and locked_until > now:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is temporarily locked"
         )
     
     # Update session last activity
-    session.last_activity = datetime.utcnow()
+    session.last_activity = now
     db.commit()
     
     return user
@@ -194,9 +212,11 @@ class AnyPermissionChecker:
 
 
 # Shorthand permission dependencies for common modules
+# NOTE: Main middleware uses CRUD names: view/create/update/delete.
 require_products_view = PermissionChecker("products.view")
 require_products_create = PermissionChecker("products.create")
-require_products_edit = PermissionChecker("products.edit")
+require_products_edit = PermissionChecker("products.update")  # backwards-compat alias
+require_products_update = PermissionChecker("products.update")
 require_products_delete = PermissionChecker("products.delete")
 
 require_inventory_view = PermissionChecker("inventory.view")
@@ -235,15 +255,18 @@ def create_audit_log(
 ):
     """Create an audit log entry"""
     try:
+        # AuditLog model uses entity_type/entity_id + old_values/new_values
         log = models.AuditLog(
             user_id=user_id,
             action=action,
             module=module,
-            record_id=record_id,
-            old_value=json.dumps(old_value) if old_value else None,
-            new_value=json.dumps(new_value) if new_value else None,
+            entity_type=module,
+            entity_id=record_id,
+            old_values=json.dumps(old_value) if old_value else None,
+            new_values=json.dumps(new_value) if new_value else None,
             ip_address=ip_address,
-            user_agent=user_agent
+            user_agent=user_agent,
+            status="success",
         )
         db.add(log)
         db.commit()

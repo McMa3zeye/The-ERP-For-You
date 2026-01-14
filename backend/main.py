@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from dotenv import load_dotenv
@@ -41,7 +41,7 @@ app = FastAPI(
 # Get allowed origins from environment or use defaults
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000"
+    "https://the-erp-for-you.vercel.app,http://localhost:5173,http://localhost:3000"
 ).split(",")
 
 # CORS middleware to allow React frontend to connect
@@ -49,8 +49,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["*"],
+    allow_headers=["*"],
     max_age=3600,
 )
 
@@ -65,6 +65,7 @@ PUBLIC_PATH_PREFIXES = (
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/admin/bootstrap-owner",  # bootstrap endpoint (see handler for behavior)
+    "/api/settings/company/info",
 )
 
 # Path prefix → module key used by permissions table
@@ -128,6 +129,8 @@ def _required_permission_for_path(path: str, method: str) -> str | None:
         return "admin.view_audit"
     if path.startswith("/api/admin/settings"):
         return "settings.manage"
+    if path.startswith("/api/settings"):
+        return "settings.manage"
 
     # Other endpoints: module.method mapping
     action = _permission_from_method(method)
@@ -154,6 +157,10 @@ async def authz_middleware(request: Request, call_next):
     # Only protect API routes; let frontend/static/dev server handle others.
     if not path.startswith("/api/"):
         return await call_next(request)
+        
+    # Always let preflight through
+    if request.method == "OPTIONS":
+        return await call_next(request)
 
     # Public endpoints
     if path.startswith(PUBLIC_PATH_PREFIXES):
@@ -171,7 +178,7 @@ async def authz_middleware(request: Request, call_next):
         session = db.query(models.UserSession).filter(
             models.UserSession.session_token == token,
             models.UserSession.is_active == True,
-            models.UserSession.expires_at > datetime.utcnow(),
+            models.UserSession.expires_at > datetime.now(timezone.utc),
         ).first()
         if not session:
             return JSONResponse(status_code=401, content={"detail": "Session expired or invalid"})
