@@ -260,40 +260,40 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
         )
 
         # Find user by username or email
+        ident = (login_data.username or "").strip()
+        ident_email = ident.lower()
+        
         user = (
             db.query(models.User)
             .options(joinedload(models.User.roles).joinedload(models.Role.permissions))
-            .filter(
-                (models.User.username == login_data.username)
-                | (models.User.email == login_data.username)
-            )
+            .filter((models.User.username == ident) | (models.User.email == ident_email))
             .first()
         )
 
-        if not user:
-            _debug_log(
-                "auth.py:login:user_lookup",
-                "User not found",
-                {"username": login_data.username},
-                "A,C",
-            )
-            log_audit(
-                db,
-                None,
-                "login",
-                "auth",
-                status="failed",
-                error_message="User not found",
-                request=request,
-            )
-            # Persist audit log for unauthenticated attempts
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-            if not user:
-                logger.info(f"LOGIN FAIL: user not found for {login_data.username}")
-                raise HTTPException(status_code=401, detail="Invalid credentials")
+if not user:
+    _debug_log(
+        "auth.py:login:user_lookup",
+        "User not found",
+        {"username": login_data.username},
+        "A,C",
+    )
+    log_audit(
+        db,
+        None,
+        "login",
+        "auth",
+        status="failed",
+        error_message="User not found",
+        request=request,
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    logger.info(f"LOGIN FAIL: user not found for {login_data.username}")
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
             
             if not password_ok:
                 logger.info(f"LOGIN FAIL: bad password for user_id={user.id}")
