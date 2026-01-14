@@ -14,6 +14,7 @@ import json
 import os
 import smtplib
 from email.message import EmailMessage
+from passlib.context import CryptContext
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -60,20 +61,15 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "")
 
 # #endregion
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Password hashing (using SHA-256 with salt - in production, use bcrypt)
-def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
-    if salt is None:
-        salt = secrets.token_hex(16)
-    password_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return f"{salt}${password_hash}", salt
-
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
 
 def verify_password(password: str, stored_hash: str) -> bool:
     try:
-        salt, hash_value = stored_hash.split("$", 1)
-        new_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-        return new_hash == hash_value
+        return pwd_context.verify(password, stored_hash)
     except Exception:
         return False
 
@@ -223,7 +219,7 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
         if not user or not user.is_active:
             raise HTTPException(status_code=400, detail="User not found or disabled")
 
-        user.password_hash, _ = hash_password(payload.new_password)
+        user.password_hash = hash_password(payload.new_password)
         user.must_change_password = False
         user.password_changed_at = now_utc
         prt.used_at = now_utc
@@ -295,6 +291,14 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
                 db.commit()
             except Exception:
                 db.rollback()
+            if not user:
+                logger.info(f"LOGIN FAIL: user not found for {login_data.username}")
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+            if not password_ok:
+                logger.info(f"LOGIN FAIL: bad password for user_id={user.id}")
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         now_utc = utcnow()
@@ -549,7 +553,7 @@ def change_password(
             raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
         now_utc = utcnow()
-        user.password_hash, _ = hash_password(password_data.new_password)
+        user.password_hash = hash_password(password_data.new_password)
         user.password_changed_at = now_utc
         user.must_change_password = False
 
