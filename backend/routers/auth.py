@@ -239,30 +239,17 @@ def reset_password(payload: schemas.ResetPasswordRequest, request: Request, db: 
 @router.post("/login", response_model=schemas.LoginResponse)
 def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depends(get_db)):
     """Authenticate user and create session."""
-
     try:
-        # Debug: log DB file only when SQLite
-        db_file = None
-        try:
-            bind = db.get_bind()
-            if getattr(bind.dialect, "name", "") == "sqlite":
-                rows = db.execute(text("PRAGMA database_list")).fetchall()
-                if rows:
-                    db_file = rows[0][2]
-        except Exception:
-            db_file = None
+        ident = (login_data.username or "").strip()
+        ident_email = ident.lower()
 
         _debug_log(
             "auth.py:login:entry",
             "Login attempt",
-            {"username": login_data.username, "db_file": db_file},
+            {"username": ident},
             "A,B,C,D",
         )
 
-        # Find user by username or email
-        ident = (login_data.username or "").strip()
-        ident_email = ident.lower()
-        
         user = (
             db.query(models.User)
             .options(joinedload(models.User.roles).joinedload(models.Role.permissions))
@@ -270,65 +257,35 @@ def login(login_data: schemas.LoginRequest, request: Request, db: Session = Depe
             .first()
         )
 
-if not user:
-    _debug_log(
-        "auth.py:login:user_lookup",
-        "User not found",
-        {"username": login_data.username},
-        "A,C",
-    )
-    log_audit(
-        db,
-        None,
-        "login",
-        "auth",
-        status="failed",
-        error_message="User not found",
-        request=request,
-    )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
+        if not user:
+            log_audit(
+                db,
+                None,
+                "login",
+                "auth",
+                status="failed",
+                error_message="User not found",
+                request=request,
+            )
+            # commit audit log even for unauthenticated attempts
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
 
-    logger.info(f"LOGIN FAIL: user not found for {login_data.username}")
-    raise HTTPException(status_code=401, detail="Invalid credentials")
-
-            
-            if not password_ok:
-                logger.info(f"LOGIN FAIL: bad password for user_id={user.id}")
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-
+            logger.info(f"LOGIN FAIL user not found: {ident}")
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         now_utc = utcnow()
 
-        # Check if account is locked
         locked_until = ensure_aware_utc(user.locked_until)
         if locked_until and locked_until > now_utc:
             raise HTTPException(status_code=403, detail="Account is temporarily locked")
 
-        # Check if account is active
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account is disabled")
 
-        # Verify password
         password_ok = verify_password(login_data.password, user.password_hash)
-
-        _debug_log(
-            "auth.py:login:password_check",
-            "Password verification result",
-            {
-                "user_id": user.id,
-                "is_active": user.is_active,
-                "locked_until_set": bool(user.locked_until),
-                "failed_login_attempts": int(user.failed_login_attempts or 0),
-                "must_change_password": bool(user.must_change_password),
-                "password_ok": bool(password_ok),
-            },
-            "B,D",
-        )
-
         if not password_ok:
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
             if user.failed_login_attempts >= 5:
@@ -344,14 +301,15 @@ if not user:
                 request=request,
             )
             db.commit()
+
+            logger.info(f"LOGIN FAIL bad password: user_id={user.id}")
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        # Reset failed attempts
+        # success: reset lock counters
         user.failed_login_attempts = 0
         user.locked_until = None
         user.last_login = now_utc
 
-        # Create session
         client_info = get_client_info(request)
         expires_at = now_utc + timedelta(days=7 if login_data.remember_me else 1)
         session_token = generate_session_token()
@@ -368,13 +326,6 @@ if not user:
         log_audit(db, user.id, "login", "auth", status="success", request=request)
         db.commit()
 
-        _debug_log(
-            "auth.py:login:success",
-            "Login success, session created",
-            {"user_id": user.id, "expires_at": expires_at.isoformat()},
-            "B",
-        )
-
         return {
             "access_token": session_token,
             "token_type": "bearer",
@@ -386,9 +337,12 @@ if not user:
         raise
     except SQLAlchemyError as e:
         db.rollback()
-        logger.error(f"Database error during login: {e}")
+        logger.error(f"Database error during login: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database error")
-
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Unexpected error during login: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
