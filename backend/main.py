@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from dotenv import load_dotenv
@@ -38,20 +38,23 @@ app = FastAPI(
     redirect_slashes=False  # Disable automatic trailing slash redirects
 )
 
-# Get allowed origins from environment or use defaults
-# Build allowed origins (CORS) from env, with safe defaults.
-# - In production set ALLOWED_ORIGINS on Render to your Vercel domain, e.g.
-#   https://the-erp-for-you.vercel.app
+# -----------------------------
+# CORS allowed origins
+# -----------------------------
 frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
-default_origins = ["http://localhost:5173", "http://localhost:3000"]
-if frontend_url:
-    default_origins.append(frontend_url)
 
 env_origins = os.getenv("ALLOWED_ORIGINS", "").strip()
 if env_origins:
+    # Render env var: comma-separated
     ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in env_origins.split(",") if o.strip()]
 else:
-    ALLOWED_ORIGINS = default_origins
+    # Local dev defaults + optional frontend URL
+    ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
+    if frontend_url:
+        ALLOWED_ORIGINS.append(frontend_url)
+
+# remove duplicates while preserving order
+ALLOWED_ORIGINS = list(dict.fromkeys(ALLOWED_ORIGINS))
 
 
 # CORS middleware to allow React frontend to connect
