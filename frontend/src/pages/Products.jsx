@@ -238,6 +238,14 @@ function Products() {
   const [filterCategory, setFilterCategory] = useState('')
   const [filterActive, setFilterActive] = useState('')
 
+  const normalizeProductType = useCallback((value) => {
+    if (!value) return 'Goods'
+    if (value === 'Final') return 'Goods'
+    if (value === 'Sub-assembly') return 'Services'
+    if (value === 'Raw Material') return 'Both'
+    return value
+  }, [])
+
   /*************************************************************************************************
    * TAB STATE (for the "Products / Categories / Units / Currencies" layout)
    *************************************************************************************************/
@@ -316,7 +324,7 @@ function Products() {
     name: '',
     description: '',
     unit_of_measure: 'pcs',
-    category: 'Raw Material',
+    category: '',
     currency: 'USD',
     product_type: 'Goods',
     base_price: 0,
@@ -615,6 +623,12 @@ function Products() {
     }
   }, [formData.currency, currencyOptions])
 
+  useEffect(() => {
+    if (!formData.category && categoryOptions.length > 0) {
+      setFormData((prev) => ({ ...prev, category: categoryOptions[0] }))
+    }
+  }, [formData.category, categoryOptions])
+
   /*************************************************************************************************
    * handleEdit: load a product into the form for editing
    *************************************************************************************************/
@@ -626,9 +640,9 @@ function Products() {
       name: product.name,
       description: product.description || '',
       unit_of_measure: product.unit_of_measure || unitOptions[0] || 'pcs',
-      category: product.category || categoryOptions[0] || 'Raw Material',
+      category: categoryOptions.includes(product.category) ? product.category : (categoryOptions[0] || ''),
       currency: product.currency || currencyOptions[0] || 'USD',
-      product_type: product.product_type || 'Final',
+      product_type: normalizeProductType(product.product_type),
       base_price: product.base_price,
       cost: product.cost,
       is_active: product.is_active,
@@ -826,9 +840,9 @@ function Products() {
       name: '',
       description: '',
       unit_of_measure: unitOptions[0] || 'pcs',
-      category: categoryOptions[0] ||'Raw Material',
+      category: categoryOptions[0] || '',
       currency: currencyOptions[0] || 'USD',
-      product_type: 'Final',
+      product_type: 'Goods',
       base_price: 0,
       cost: 0,
       is_active: true,
@@ -849,11 +863,11 @@ function Products() {
    *************************************************************************************************/
   const subAssemblyProducts = useMemo(
     () =>
-      allProducts.filter(
-        (p) =>
-          p.product_type === 'Goods' || p.product_type === 'Service' ||p.product_type === 'Both'
-      ),
-@@ -751,72 +1054,98 @@ function Products() {
+      allProducts.filter((p) => {
+        const type = normalizeProductType(p.product_type)
+        return type === 'Goods' || type === 'Services' || type === 'Both'
+      }),
+    [allProducts, normalizeProductType]
                   console.error('Error reloading charts:', e)
                 }
               }
@@ -919,9 +933,9 @@ function Products() {
 
         <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
           <option value="">All Types</option>
-          <option value="Final">Goods</option>
-          <option value="Sub-assembly">Services</option>
-          <option value="Raw Material">Both</option>
+          <option value="Goods">Goods</option>
+          <option value="Services">Services</option>
+          <option value="Both">Both</option>
         </select>
 
         <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
@@ -1004,6 +1018,24 @@ function Products() {
                       {cat}
                     </option>
                   ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Type</label>
+                <select
+                  value={formData.product_type}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      product_type: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">Select type...</option>
+                  <option value="Goods">Goods</option>
+                  <option value="Services">Services</option>
+                  <option value="Both">Both</option>
                 </select>
               </div>
             </div>
@@ -1100,10 +1132,7 @@ function Products() {
 
             <div style={{ marginBottom: '1.5rem' }}>
               <p><strong>SKU:</strong> {selectedProduct.sku}</p>
-              <p>
-                <strong>Type:</strong>{' '}
-                {selectedProduct.product_type ? `${selectedProduct.product_type} ` : ''}{selectedProduct.type.toFixed(2)}
-              </p>
+              <p><strong>Type:</strong> {normalizeProductType(selectedProduct.product_type)}</p>
               <p><strong>Category:</strong> {selectedProduct.category || 'N/A'}</p>
               <p><strong>Unit:</strong> {selectedProduct.unit_of_measure || 'N/A'}</p>
               <p><strong>Currency:</strong> {selectedProduct.currency || 'N/A'}</p>
