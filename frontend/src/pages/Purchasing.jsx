@@ -1,15 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { purchasingAPI, suppliersAPI, productsAPI } from '../services/api'
 import Pagination from '../components/Pagination'
 import SortableTable from '../components/SortableTable'
 import { useDebounce } from '../hooks/useDebounce'
 
 function Purchasing() {
+  // Read query params so we can open a PO modal from another page (like Products).
+  const [searchParams, setSearchParams] = useSearchParams()
+
   const [purchaseOrders, setPurchaseOrders] = useState([])
   const [suppliers, setSuppliers] = useState([])
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
+  const [selectedPO, setSelectedPO] = useState(null)
   const [alert, setAlert] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const debouncedSearchTerm = useDebounce(searchTerm, 500)
@@ -35,22 +41,7 @@ function Purchasing() {
     }
   }
 
-  const loadProducts = async () => {
-    try {
-      const response = await productsAPI.getAll({ limit: 1000 })
-      setProducts(Array.isArray(response.data) ? response.data : (response.data.items || []))
-    } catch (error) {
-      console.error('Error loading products:', error)
-    }
-  }
-
-  const showAlert = (message, type = 'success') => {
-    setAlert({ message, type })
-    setTimeout(() => setAlert(null), 4000)
-  }
-
-  const loadData = useCallback(async (page = 1) => {
-    try {
+@@ -54,50 +60,68 @@ function Purchasing() {
       setLoading(true)
       const params = { skip: (page - 1) * itemsPerPage, limit: itemsPerPage }
       if (debouncedSearchTerm) params.search = debouncedSearchTerm
@@ -75,6 +66,24 @@ function Purchasing() {
     loadSuppliers()
     loadProducts()
   }, [])
+
+  // If we land on this page with ?poId=123, load the PO and show its details modal.
+  useEffect(() => {
+    const poId = searchParams.get('poId')
+    if (!poId) return
+
+    const loadPO = async () => {
+      try {
+        const response = await purchasingAPI.getById(poId)
+        setSelectedPO(response.data)
+        setShowDetails(true)
+      } catch (error) {
+        showAlert('Error loading purchase order: ' + error.message, 'error')
+      }
+    }
+
+    loadPO()
+  }, [searchParams])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -101,35 +110,7 @@ function Purchasing() {
     
     if (field === 'product_id' && value) {
       const product = products.find(p => p.id === parseInt(value))
-      if (product) {
-        newItems[index].unit_price = product.cost || 0
-      }
-    }
-    
-    setFormData({ ...formData, items: newItems })
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!formData.supplier_id) {
-      showAlert('Please select a supplier', 'error')
-      return
-    }
-    if (formData.items.length === 0) {
-      showAlert('Please add at least one item', 'error')
-      return
-    }
-
-    try {
-      await purchasingAPI.create({
-        ...formData,
-        supplier_id: parseInt(formData.supplier_id),
-      })
-      showAlert('Purchase order created successfully!')
-      resetForm()
-      loadData()
-    } catch (error) {
-      showAlert('Error: ' + (error.response?.data?.detail || error.message), 'error')
+@@ -133,69 +157,123 @@ function Purchasing() {
     }
   }
 
@@ -155,6 +136,15 @@ function Purchasing() {
     setShowForm(false)
   }
 
+  // Close the PO details modal and clean the URL query param.
+  const closeDetails = () => {
+    setShowDetails(false)
+    setSelectedPO(null)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('poId')
+    setSearchParams(nextParams)
+  }
+
   if (loading && purchaseOrders.length === 0) {
     return <div className="spinner"></div>
   }
@@ -171,6 +161,51 @@ function Purchasing() {
       {alert && (
         <div className={`alert alert-${alert.type === 'error' ? 'error' : 'success'}`}>
           {alert.message}
+        </div>
+      )}
+
+      {/* Purchase Order Details Modal */}
+      {showDetails && selectedPO && (
+        <div className="modal-overlay" onClick={closeDetails}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>🛒 Purchase Order {selectedPO.po_number}</h2>
+              <button className="btn btn-secondary" onClick={closeDetails}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Supplier:</strong> {selectedPO.supplier?.company_name || '-'}</p>
+              <p><strong>Status:</strong> {selectedPO.status}</p>
+              <p><strong>Expected Delivery:</strong> {selectedPO.expected_delivery_date || '-'}</p>
+              <p><strong>Total:</strong> ${selectedPO.grand_total?.toFixed(2)}</p>
+            </div>
+
+            <h3 style={{ marginTop: '1rem' }}>Items</h3>
+            <table style={{ marginTop: '0.5rem' }}>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Product</th>
+                  <th>Qty</th>
+                  <th>Unit Price</th>
+                  <th>Line Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedPO.items?.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.product?.sku || '-'}</td>
+                    <td>{item.product?.name || '-'}</td>
+                    <td>{item.quantity}</td>
+                    <td>${item.unit_price?.toFixed(2)}</td>
+                    <td>${item.line_total?.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
