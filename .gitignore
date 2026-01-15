@@ -6,7 +6,8 @@
 **/.env
 backend/.env
 frontend/.env
-
+.vs/
+.vscode/
 # =========================
 # Node / frontend
 # =========================
