@@ -8,8 +8,9 @@ class ProductBase(BaseModel):
     name: str
     description: Optional[str] = None
     unit_of_measure: str = "pcs"
-    category: Optional[str] = None
-    product_type: str = "Final"  # Final, Sub-assembly, or Raw Material
+    category: str = "Raw Material"
+    currency_code: str = "USD"
+    product_type: str = "Goods"  # Goods, service, both
     base_price: float = 0.0
     cost: float = 0.0
     is_active: bool = True
@@ -23,6 +24,7 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     unit_of_measure: Optional[str] = None
     category: Optional[str] = None
+    currency_code: Optional[str] = None
     product_type: Optional[str] = None
     base_price: Optional[float] = None
     cost: Optional[float] = None
