@@ -919,9 +919,9 @@ function Products() {
 
         <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
           <option value="">All Types</option>
-          <option value="Final">🪵 Final Products</option>
-          <option value="Sub-assembly">🔩 Sub-assemblies</option>
-          <option value="Raw Material">🌲 Raw Materials</option>
+          <option value="Final">Goods</option>
+          <option value="Sub-assembly">Services</option>
+          <option value="Raw Material">Both</option>
         </select>
 
         <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
