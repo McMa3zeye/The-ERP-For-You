@@ -1,13 +1,4 @@
-/***************************************************************************************************
- * Products.jsx
- *
- * You asked for **the exact same JSX** but with **everything explained inside comments** —
- * line-by-line, extremely beginner-friendly, like you’re learning your first words.
- *
- * ⚠️ Note:
- * - This file is written in **JavaScript + React** (NOT Java).
- * - JavaScript (JS) runs in the browser. Java is a different language (often server apps / Android).
- * - React is a JS library that helps you build user interfaces (screens/pages) by composing components.
+ /* - React is a JS library that helps you build user interfaces (screens/pages) by composing components.
  **************************************************************************************************/
 
 /***************************************************************************************************
@@ -32,6 +23,7 @@
  * Here we import 4 React Hooks:
  */
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 /**
  * useState:
  * - Gives the component "memory".
@@ -67,7 +59,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
  * - productsAPI (we use it a lot)
  * - salesOrdersAPI (⚠️ in THIS snippet it’s imported but not used; could be for future features)
  */
-import { productsAPI, salesOrdersAPI } from '../services/api'
+import { productsAPI, purchasingAPI, inventoryAPI } from '../services/api'
 
 /**
  * Pagination is a UI component:
@@ -93,30 +85,7 @@ import SortableTable from '../components/SortableTable'
 /**
  * useDebounce is a custom hook from your project.
  *
- * “Debounce” means:
- * - Don’t run something immediately every time the user types.
- * - Wait a little (like 500ms).
- * - If they keep typing, keep waiting.
- *
- * Example:
- * - User types "wood"
- * - Instead of making 4 API calls (w, wo, woo, wood),
- *   you wait until user pauses typing, then call once.
- */
-import { useDebounce } from '../hooks/useDebounce'
-
-/**
- * These are chart-related components/utilities.
- * In this snippet, you use ChartImporter (for importing charts).
- * Some other imports (UnifiedChartBuilder / ChartWidget / exportChartData) are not used in this snippet,
- * but maybe you planned to use them or use them in another branch of UI.
- */
-import UnifiedChartBuilder from '../components/UnifiedChartBuilder'
-import ChartWidget from '../components/ChartWidget'
-import ChartImporter from '../components/ChartImporter'
-import { exportChartData } from '../utils/export'
-
-/**
+@@ -120,130 +121,165 @@ import { exportChartData } from '../utils/export'
  * useAuth is a hook from your AuthContext.
  * It gives you authentication/authorization tools (like permissions).
  * Example:
@@ -142,6 +111,10 @@ function Products() {
   // Context is like a global shared "store" of data (user info, permissions, etc.).
   const { hasPermission } = useAuth()
 
+  // useNavigate lets us jump to another page in the app programmatically.
+  // We will use this when the user clicks a PO/SO/Emplacement link in the details modal.
+  const navigate = useNavigate()
+
   // We compute permission flags:
   // canCreate is true if user has 'products.create'.
   // canUpdate is true if user has 'products.update'.
@@ -149,6 +122,14 @@ function Products() {
   const canCreate = hasPermission('products.create')
   const canUpdate = hasPermission('products.update')
   const canDelete = hasPermission('products.delete')
+
+  /*************************************************************************************************
+   * PAGE-LEVEL TABS (Products / Categories / Units / Currencies)
+   *
+   * We mimic the Admin page's tabs so this page feels consistent.
+   *************************************************************************************************/
+  const PRODUCT_TABS = ['Products', 'Categories', 'Units', 'Currencies']
+  const [activeTab, setActiveTab] = useState('Products')
 
   /*************************************************************************************************
    * STATE (component memory)
@@ -163,6 +144,10 @@ function Products() {
   // products = the current page of products displayed in the table.
   // starts empty [].
   const [products, setProducts] = useState([])
+
+  // inventoryByProduct maps product_id -> array of inventory items (emplacements).
+  // This helps us show a quick "emplacements" column in the product table.
+  const [inventoryByProduct, setInventoryByProduct] = useState({})
 
   // allProducts = a big list used for ingredient selection dropdowns.
   // Why separate?
@@ -182,8 +167,23 @@ function Products() {
   // selectedProduct stores the product the user clicked on for details/ingredients.
   const [selectedProduct, setSelectedProduct] = useState(null)
 
-  // linkedOrders holds sales orders connected to a product (for the details modal).
-  const [linkedOrders, setLinkedOrders] = useState([])
+  // linkedSalesOrders holds sales orders connected to a product (for the details modal).
+  const [linkedSalesOrders, setLinkedSalesOrders] = useState([])
+
+  // linkedPurchaseOrders holds purchase orders connected to a product.
+  const [linkedPurchaseOrders, setLinkedPurchaseOrders] = useState([])
+
+  // linkedInventoryItems holds the inventory emplacements (locations) for a product.
+  const [linkedInventoryItems, setLinkedInventoryItems] = useState([])
+
+  // linkedTransfers holds transfer movements between emplacements (movement_type === TRANSFER).
+  const [linkedTransfers, setLinkedTransfers] = useState([])
+
+  // detailsTab controls which tab is active inside the details modal.
+  const [detailsTab, setDetailsTab] = useState('POs')
+
+  // These are the tabs inside the Product Details modal.
+  const DETAILS_TABS = ['POs', 'SOs', 'Emplacements', 'Transfers']
 
   // showIngredients controls whether the ingredients modal is open.
   const [showIngredients, setShowIngredients] = useState(false)
@@ -222,6 +222,10 @@ function Products() {
   // Example: wood plank x 2, glue x 0.1, etc.
   const [formIngredients, setFormIngredients] = useState([])
 
+  // Emplacements chosen inside the creation form (inventory locations).
+  // Each row becomes an inventory item tied to this product.
+  const [formEmplacements, setFormEmplacements] = useState([])
+
   // Chart builder UI state
   const [showChartBuilder, setShowChartBuilder] = useState(false)
 
@@ -247,37 +251,7 @@ function Products() {
           // JSON.parse converts a JSON string back into a JS array/object.
           const allCharts = JSON.parse(saved)
 
-          // We only keep charts that belong to this page
-          // or charts that are shared to this page.
-          setSavedCharts(
-            allCharts.filter(
-              (c) =>
-                c.postToPage === 'products' ||
-                (c.sharedPages && c.sharedPages.includes('products'))
-            )
-          )
-        } catch (e) {
-          // If JSON.parse fails, it means savedCharts is corrupted or not valid JSON.
-          console.error('Error loading saved charts:', e)
-        }
-      }
-    }
-
-    // Load charts immediately on mount.
-    loadSavedCharts()
-
-    // Listen to a custom event called 'chartsUpdated'
-    // so if another part of the app updates charts, this page refreshes them.
-    window.addEventListener('chartsUpdated', loadSavedCharts)
-
-    // Cleanup function:
-    // This runs when component unmounts (like leaving the page),
-    // removing the event listener so we don’t leak memory.
-    return () => window.removeEventListener('chartsUpdated', loadSavedCharts)
-  }, [])
-
-  /*************************************************************************************************
-   * SAVE A CHART
+@@ -281,50 +317,51 @@ function Products() {
    *************************************************************************************************/
   const handleSaveChart = (chartConfig) => {
     // Get existing charts from localStorage or default to [].
@@ -303,6 +277,7 @@ function Products() {
     description: '',
     unit_of_measure: 'pcs',
     category: '',
+    currency_code: 'USD',
     product_type: 'Final',
     base_price: 0,
     cost: 0,
@@ -328,62 +303,7 @@ function Products() {
     // This disables a lint rule that would ask you to add loadProducts as a dependency.
     // You intentionally want to run only once here.
   }, [])
-
-  /*************************************************************************************************
-   * loadProducts (main function to fetch products from backend)
-   *
-   * useCallback means: React will keep the same function identity unless dependencies change.
-   * That helps avoid weird re-render loops in effects and child components.
-   *************************************************************************************************/
-  const loadProducts = useCallback(
-    async (page = 1, skipLoading = false) => {
-      try {
-        // If we are NOT skipping loading, we show spinner.
-        if (!skipLoading) setLoading(true)
-
-        // Params = query parameters sent to backend.
-        // skip/limit = pagination.
-        const params = {
-          skip: (page - 1) * itemsPerPage,
-          limit: itemsPerPage,
-        }
-
-        // If the user typed something, include search param.
-        if (debouncedSearchTerm) params.search = debouncedSearchTerm
-
-        // Add filters if present.
-        if (filterType) params.product_type = filterType
-        if (filterCategory) params.category = filterCategory
-        if (filterActive !== '') params.is_active = filterActive === 'true'
-
-        // Call backend: productsAPI.getAll(params)
-        // This likely does GET /api/products?skip=...&limit=...&search=...
-        const response = await productsAPI.getAll(params)
-
-        // You support 2 possible backend response shapes:
-        //
-        // 1) OLD: backend returns an array directly: [ {...}, {...} ]
-        // 2) NEW: backend returns { items: [...], total: 123 }
-        //
-        // So you check:
-        if (Array.isArray(response.data)) {
-          // Old format
-          setProducts(response.data)
-          setTotalItems(response.data.length)
-        } else {
-          // New format
-          setProducts(response.data.items || [])
-          setTotalItems(response.data.total || 0)
-        }
-      } catch (error) {
-        // If an error happens, show an alert.
-        showAlert('Error loading products: ' + error.message, 'error')
-      } finally {
-        // finally runs whether success or error.
-        if (!skipLoading) setLoading(false)
-      }
-    },
-    // Dependencies: if any of these change, the function is recreated with new values.
+@@ -387,72 +424,109 @@ function Products() {
     [debouncedSearchTerm, filterType, filterCategory, filterActive, itemsPerPage]
   )
 
@@ -410,6 +330,36 @@ function Products() {
   }, [])
 
   /*************************************************************************************************
+   * Load inventory snapshot for the current product list
+   *
+   * We only need locations for products visible in the table.
+   *************************************************************************************************/
+  const loadInventorySnapshot = useCallback(async (productList) => {
+    if (productList.length === 0) {
+      setInventoryByProduct({})
+      return
+    }
+
+    try {
+      const response = await inventoryAPI.getItems({ limit: 1000 })
+      const items = response.data.items || response.data || []
+      const ids = new Set(productList.map((product) => product.id))
+
+      const grouped = items.reduce((acc, item) => {
+        if (!ids.has(item.product_id)) return acc
+        acc[item.product_id] = acc[item.product_id] || []
+        acc[item.product_id].push(item)
+        return acc
+      }, {})
+
+      setInventoryByProduct(grouped)
+    } catch (error) {
+      console.error('Error loading inventory snapshot:', error)
+      setInventoryByProduct({})
+    }
+  }, [])
+
+  /*************************************************************************************************
    * Reset to page 1 when filters/search change
    *************************************************************************************************/
   useEffect(() => {
@@ -430,6 +380,13 @@ function Products() {
     loadProducts(currentPage, shouldSkipLoading)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, debouncedSearchTerm, filterType, filterCategory, filterActive])
+
+  /*************************************************************************************************
+   * Whenever the product list changes, refresh the inventory snapshot.
+   *************************************************************************************************/
+  useEffect(() => {
+    loadInventorySnapshot(products)
+  }, [products, loadInventorySnapshot])
 
   /*************************************************************************************************
    * Refresh table only (no global spinner)
@@ -456,11 +413,7 @@ function Products() {
     try {
       let productId
 
-      // If editingProduct exists, we update.
-      if (editingProduct) {
-        await productsAPI.update(editingProduct.id, formData)
-        productId = editingProduct.id
-        showAlert('✅ Product updated successfully!')
+@@ -464,160 +538,317 @@ function Products() {
       } else {
         // Otherwise, we create a new product.
         const created = await productsAPI.create(formData)
@@ -484,6 +437,30 @@ function Products() {
         // Clear ingredients after saving.
         setFormIngredients([])
         showAlert('✅ Product and ingredients saved!')
+      }
+
+      // Add emplacements (inventory items) if user defined any.
+      if (formEmplacements.length > 0 && productId) {
+        for (const emplacement of formEmplacements) {
+          if (!emplacement.location.trim()) continue
+
+          try {
+            await inventoryAPI.createItem({
+              product_id: productId,
+              location: emplacement.location.trim(),
+              quantity_on_hand: emplacement.quantity_on_hand,
+              reorder_point: emplacement.reorder_point,
+              reorder_quantity: emplacement.reorder_quantity,
+            })
+          } catch (emplacementError) {
+            console.error('Error adding emplacement:', emplacementError)
+            showAlert(
+              '⚠️ Emplacement error: ' +
+                (emplacementError.response?.data?.detail || emplacementError.message),
+              'error'
+            )
+          }
+        }
       }
 
       // Reset form UI
@@ -524,28 +501,120 @@ function Products() {
   }
 
   /*************************************************************************************************
-   * Categories state + loader
+   * Emplacement rows inside the product creation form
    *************************************************************************************************/
+  const handleAddFormEmplacement = () => {
+    // Add a new emplacement row with sensible defaults.
+    setFormEmplacements([
+      ...formEmplacements,
+      {
+        location: '',
+        quantity_on_hand: 0,
+        reorder_point: 0,
+        reorder_quantity: 0,
+      },
+    ])
+  }
+
+  const handleRemoveFormEmplacement = (index) => {
+    setFormEmplacements(formEmplacements.filter((_, i) => i !== index))
+  }
+
+  const handleFormEmplacementChange = (index, field, value) => {
+    const next = [...formEmplacements]
+
+    next[index][field] =
+      field === 'location' ? value : parseFloat(value) || 0
+
+    setFormEmplacements(next)
+  }
+
+  /*************************************************************************************************
+   * Categories / Units / Currencies state + loaders
+   *
+   * We store these lists in localStorage so the user can define them once
+   * and reuse them everywhere (just like the "Admin" tab behavior).
+   *************************************************************************************************/
+  const CATEGORY_STORAGE_KEY = 'products.categories'
+  const UNIT_STORAGE_KEY = 'products.units'
+  const CURRENCY_STORAGE_KEY = 'products.currencies'
+
+  // Categories are used for the category dropdown in the product form.
   const [categories, setCategories] = useState([])
 
+  // Units are used for the unit-of-measure dropdown in the product form.
+  const [units, setUnits] = useState(['pcs', 'kg', 'm', 'm2', 'm3'])
+
+  // Currencies are used for the currency dropdown in the product form.
+  // Each currency has a code, symbol, and display name.
+  const [currencies, setCurrencies] = useState([
+    { code: 'USD', symbol: '$', name: 'US Dollar' },
+  ])
+
+  // Local input state for the "management" tabs (Categories/Units/Currencies).
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [newUnitName, setNewUnitName] = useState('')
+  const [newCurrencyCode, setNewCurrencyCode] = useState('')
+  const [newCurrencySymbol, setNewCurrencySymbol] = useState('')
+  const [newCurrencyName, setNewCurrencyName] = useState('')
+
   useEffect(() => {
-    const loadCategories = async () => {
+    const loadLists = async () => {
+      // 1) Pull user-defined lists from localStorage if they exist.
+      const storedCategories = JSON.parse(
+        localStorage.getItem(CATEGORY_STORAGE_KEY) || '[]'
+      )
+      const storedUnits = JSON.parse(
+        localStorage.getItem(UNIT_STORAGE_KEY) || '[]'
+      )
+      const storedCurrencies = JSON.parse(
+        localStorage.getItem(CURRENCY_STORAGE_KEY) || '[]'
+      )
+
+      if (storedUnits.length > 0) setUnits(storedUnits)
+      if (storedCurrencies.length > 0) setCurrencies(storedCurrencies)
+
+      // 2) For categories, we merge localStorage with backend categories,
+      //    so we don't lose anything that already exists in products.
       try {
-        // Try to load categories from backend
         const response = await productsAPI.getCategories()
-        setCategories(response.data || [])
+        const backendCategories = response.data || []
+        const mergedCategories = Array.from(
+          new Set([...storedCategories, ...backendCategories].filter(Boolean))
+        ).sort()
+        setCategories(mergedCategories)
       } catch (error) {
         console.error('Error loading categories:', error)
 
         // Fallback:
-        // Extract categories from products already loaded
-        setCategories(
-          [...new Set(products.map((p) => p.category).filter(Boolean))].sort()
-        )
+        // Extract categories from products already loaded.
+        const fallbackCategories = [
+          ...new Set(products.map((p) => p.category).filter(Boolean)),
+        ].sort()
+        setCategories(Array.from(new Set([...storedCategories, ...fallbackCategories])))
+Add a comment
+
+Cancel
+
+Comment
       }
     }
-    loadCategories()
+
+    loadLists()
   }, []) // run once on mount
+
+  // Persist category/unit/currency lists whenever they change.
+  useEffect(() => {
+    localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(categories))
+  }, [categories])
+
+  useEffect(() => {
+    localStorage.setItem(UNIT_STORAGE_KEY, JSON.stringify(units))
+  }, [units])
+
+  useEffect(() => {
+    localStorage.setItem(CURRENCY_STORAGE_KEY, JSON.stringify(currencies))
+  }, [currencies])
 
   /*************************************************************************************************
    * handleEdit: load a product into the form for editing
@@ -559,12 +628,16 @@ function Products() {
       description: product.description || '',
       unit_of_measure: product.unit_of_measure,
       category: product.category || '',
+      currency_code: product.currency_code || 'USD',
       product_type: product.product_type || 'Final',
       base_price: product.base_price,
       cost: product.cost,
       is_active: product.is_active,
       is_tracked: product.is_tracked,
     })
+
+    // We reset emplacements on edit so the user can add new ones explicitly.
+    setFormEmplacements([])
 
     // Open the form
     setShowForm(true)
@@ -592,10 +665,52 @@ function Products() {
    *************************************************************************************************/
   const handleViewDetails = async (product) => {
     setSelectedProduct(product)
+    setLinkedSalesOrders([])
+    setLinkedPurchaseOrders([])
+    setLinkedInventoryItems([])
+    setLinkedTransfers([])
 
     try {
-      const response = await productsAPI.getSalesOrders(product.id)
-      setLinkedOrders(response.data)
+      // Load linked Sales Orders.
+      const salesResponse = await productsAPI.getSalesOrders(product.id)
+      setLinkedSalesOrders(salesResponse.data || [])
+
+      // Load linked Purchase Orders (filter client-side by product ID).
+      const poResponse = await purchasingAPI.getAll({ limit: 1000 })
+      const poItems = poResponse.data.items || poResponse.data || []
+      const linkedPOs = poItems.filter((po) =>
+        po.items?.some((item) => item.product_id === product.id)
+      )
+      setLinkedPurchaseOrders(linkedPOs)
+
+      // Load emplacements (inventory items) for this product.
+      const inventoryResponse = await inventoryAPI.getItems({
+        product_id: product.id,
+        limit: 1000,
+      })
+      const inventoryItems = inventoryResponse.data.items || inventoryResponse.data || []
+      setLinkedInventoryItems(inventoryItems)
+
+      // Load transfer movements for each inventory item.
+      const movementResponses = await Promise.all(
+        inventoryItems.map((item) =>
+          inventoryAPI.getMovements({
+            inventory_item_id: item.id,
+            limit: 1000,
+          })
+        )
+      )
+
+      const allMovements = movementResponses.flatMap(
+        (response) => response.data.items || response.data || []
+      )
+      const transferMovements = allMovements.filter(
+        (movement) => movement.movement_type === 'TRANSFER'
+      )
+      setLinkedTransfers(transferMovements)
+
+      // Default to the PO tab when opening.
+      setDetailsTab('POs')
       setShowDetails(true)
     } catch (error) {
       showAlert('⚠️ Error loading details: ' + error.message, 'error')
@@ -621,31 +736,7 @@ function Products() {
    * handleAddIngredient: add ingredient to selected product (modal)
    *************************************************************************************************/
   const handleAddIngredient = async (e) => {
-    e.preventDefault()
-
-    if (!selectedProduct || !ingredientForm.ingredient_id) {
-      showAlert('⚠️ Please select an ingredient', 'error')
-      return
-    }
-
-    try {
-      await productsAPI.addIngredient(selectedProduct.id, ingredientForm)
-      showAlert('✅ Ingredient added successfully!')
-
-      // Reset ingredient form
-      setIngredientForm({ ingredient_id: '', quantity: 1 })
-
-      // Reload ingredient list
-      handleViewIngredients(selectedProduct)
-    } catch (error) {
-      showAlert(
-        '⚠️ Error: ' + (error.response?.data?.detail || error.message),
-        'error'
-      )
-    }
-  }
-
-  /*************************************************************************************************
+@@ -649,309 +880,425 @@ function Products() {
    * handleRemoveIngredient: remove ingredient relation (modal)
    *************************************************************************************************/
   const handleRemoveIngredient = async (ingredientId) => {
@@ -671,6 +762,7 @@ function Products() {
       description: '',
       unit_of_measure: 'pcs',
       category: '',
+      currency_code: 'USD',
       product_type: 'Final',
       base_price: 0,
       cost: 0,
@@ -679,8 +771,66 @@ function Products() {
     })
 
     setFormIngredients([])
+    setFormEmplacements([])
     setEditingProduct(null)
     setShowForm(false)
+  }
+
+  /*************************************************************************************************
+   * Category / Unit / Currency management helpers
+   *
+   * These functions support the tabbed management UI so the user can define
+   * lists (categories/units/currencies) and then select them in the Product form.
+   *************************************************************************************************/
+  const handleAddCategory = () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) return
+
+    setCategories((prev) =>
+      Array.from(new Set([...prev, trimmed])).sort()
+    )
+    setNewCategoryName('')
+  }
+
+  const handleRemoveCategory = (category) => {
+    setCategories((prev) => prev.filter((cat) => cat !== category))
+  }
+
+  const handleAddUnit = () => {
+    const trimmed = newUnitName.trim()
+    if (!trimmed) return
+
+    setUnits((prev) =>
+      Array.from(new Set([...prev, trimmed]))
+    )
+    setNewUnitName('')
+  }
+
+  const handleRemoveUnit = (unit) => {
+    setUnits((prev) => prev.filter((item) => item !== unit))
+  }
+
+  const handleAddCurrency = () => {
+    const code = newCurrencyCode.trim().toUpperCase()
+    const symbol = newCurrencySymbol.trim()
+    const name = newCurrencyName.trim()
+
+    if (!code || !symbol || !name) return
+
+    setCurrencies((prev) => {
+      const next = prev.filter((currency) => currency.code !== code)
+      return [...next, { code, symbol, name }].sort((a, b) =>
+        a.code.localeCompare(b.code)
+      )
+    })
+
+    setNewCurrencyCode('')
+    setNewCurrencySymbol('')
+    setNewCurrencyName('')
+  }
+
+  const handleRemoveCurrency = (code) => {
+    setCurrencies((prev) => prev.filter((currency) => currency.code !== code))
   }
 
   /*************************************************************************************************
@@ -697,6 +847,14 @@ function Products() {
           p.product_type === 'Sub-assembly' || p.product_type === 'Raw Material'
       ),
     [allProducts]
+  )
+
+  /*************************************************************************************************
+   * Helper: map currency code to display info (symbol/name)
+   *************************************************************************************************/
+  const getCurrencyMeta = useCallback(
+    (code) => currencies.find((currency) => currency.code === code),
+    [currencies]
   )
 
   /*************************************************************************************************
@@ -727,41 +885,69 @@ function Products() {
 
         {/* Buttons row */}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button className="btn btn-info" onClick={() => setShowChartBuilder(true)}>
-            📊 Create Chart
-          </button>
+          {activeTab === 'Products' && (
+            <>
+              <button className="btn btn-info" onClick={() => setShowChartBuilder(true)}>
+                📊 Create Chart
+              </button>
 
-          {/* ChartImporter component: lets user import chart configurations */}
-          <ChartImporter
-            currentPage="products"
-            onImport={() => {
-              // When a chart is imported, reload the saved charts list from localStorage.
-              const saved = localStorage.getItem('savedCharts')
-              if (saved) {
-                try {
-                  const allCharts = JSON.parse(saved)
-                  setSavedCharts(
-                    allCharts.filter(
-                      (c) =>
-                        c.postToPage === 'products' ||
-                        (c.sharedPages && c.sharedPages.includes('products'))
-                    )
-                  )
-                } catch (e) {
-                  console.error('Error reloading charts:', e)
-                }
-              }
-            }}
-          />
+              {/* ChartImporter component: lets user import chart configurations */}
+              <ChartImporter
+                currentPage="products"
+                onImport={() => {
+                  // When a chart is imported, reload the saved charts list from localStorage.
+                  const saved = localStorage.getItem('savedCharts')
+                  if (saved) {
+                    try {
+                      const allCharts = JSON.parse(saved)
+                      setSavedCharts(
+                        allCharts.filter(
+                          (c) =>
+                            c.postToPage === 'products' ||
+                            (c.sharedPages && c.sharedPages.includes('products'))
+                        )
+                      )
+                    } catch (e) {
+                      console.error('Error reloading charts:', e)
+                    }
+                  }
+                }}
+              />
 
-          {/* Only show the Add Product button if user has create permission */}
-          {canCreate && (
-            <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-              {/* If form is showing, button becomes Cancel */}
-              {showForm ? '❌ Cancel' : '➕ Add Product'}
-            </button>
+              {/* Only show the Add Product button if user has create permission */}
+              {canCreate && (
+                <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+                  {/* If form is showing, button becomes Cancel */}
+                  {showForm ? '❌ Cancel' : '➕ Add Product'}
+                </button>
+              )}
+            </>
           )}
         </div>
+      </div>
+
+      {/* =========================
+          PAGE TABS (Products / Categories / Units / Currencies)
+          ========================= */}
+      <div className="tabs-container" style={{ marginBottom: '1rem' }}>
+        {PRODUCT_TABS.map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`tab-button ${activeTab === tab ? 'active' : ''}`}
+            style={{
+              padding: '0.75rem 1.5rem',
+              border: 'none',
+              background: activeTab === tab ? 'var(--green-500)' : 'var(--brown-700)',
+              color: activeTab === tab ? 'var(--brown-900)' : 'var(--brown-200)',
+              cursor: 'pointer',
+              borderRadius: '4px 4px 0 0',
+              marginRight: '2px',
+            }}
+          >
+            {tab}
+          </button>
+        ))}
       </div>
 
       {/* =========================
@@ -773,110 +959,112 @@ function Products() {
         </div>
       )}
 
-      {/* =========================
-          SEARCH + FILTERS
-          ========================= */}
-      <div className="search-bar">
-        <input
-          type="search"
-          placeholder="🔍 Search by name or SKU..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ flex: '2', minWidth: '250px' }}
-        />
+      {activeTab === 'Products' && (
+        <>
+          {/* =========================
+              SEARCH + FILTERS
+              ========================= */}
+          <div className="search-bar">
+            <input
+              type="search"
+              placeholder="🔍 Search by name or SKU..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ flex: '2', minWidth: '250px' }}
+            />
 
-        <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-          <option value="">All Types</option>
-          <option value="Final">🪵 Final Products</option>
-          <option value="Sub-assembly">🔩 Sub-assemblies</option>
-          <option value="Raw Material">🌲 Raw Materials</option>
-        </select>
+            <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+              <option value="">All Types</option>
+              <option value="Final">🪵 Final Products</option>
+              <option value="Sub-assembly">🔩 Sub-assemblies</option>
+              <option value="Raw Material">🌲 Raw Materials</option>
+            </select>
 
-        <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-          <option value="">All Categories</option>
-          {categories.map((cat) => (
-            <option key={cat} value={cat}>
-              {cat}
-            </option>
-          ))}
-        </select>
+            <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+              <option value="">All Categories</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
 
-        <select value={filterActive} onChange={(e) => setFilterActive(e.target.value)}>
-          <option value="">All Status</option>
-          <option value="true">✅ Active</option>
-          <option value="false">❌ Inactive</option>
-        </select>
+            <select value={filterActive} onChange={(e) => setFilterActive(e.target.value)}>
+              <option value="">All Status</option>
+              <option value="true">✅ Active</option>
+              <option value="false">❌ Inactive</option>
+            </select>
 
-        {/* Clear filters button shows only if at least one filter/search is active */}
-        {(searchTerm || filterType || filterCategory || filterActive) && (
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              setSearchTerm('')
-              setFilterType('')
-              setFilterCategory('')
-              setFilterActive('')
-            }}
-          >
-            🗑️ Clear Filters
-          </button>
-        )}
-      </div>
+            {/* Clear filters button shows only if at least one filter/search is active */}
+            {(searchTerm || filterType || filterCategory || filterActive) && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setSearchTerm('')
+                  setFilterType('')
+                  setFilterCategory('')
+                  setFilterActive('')
+                }}
+              >
+                🗑️ Clear Filters
+              </button>
+            )}
+          </div>
 
-      {/* =========================
-          CREATE/EDIT FORM (conditional)
-          ========================= */}
-      {showForm && (
-        <div className="card">
-          <h2>{editingProduct ? '✏️ Edit Product' : '➕ New Product'}</h2>
+          {/* =========================
+              CREATE/EDIT FORM (conditional)
+              ========================= */}
+          {showForm && (
+            <div className="card">
+              <h2>{editingProduct ? '✏️ Edit Product' : '➕ New Product'}</h2>
 
-          {/* Explanation of SKU pattern */}
-          <p style={{ color: 'var(--brown-200)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-            💡 SKU will be auto-generated:{' '}
-            {formData.product_type === 'Final'
-              ? 'P-YYYY-####-####'
-              : formData.product_type === 'Raw Material'
-              ? 'R-YYYY-####-####'
-              : 'M-YYYY-####-####'}
-          </p>
+              {/* Explanation of SKU pattern */}
+              <p style={{ color: 'var(--brown-200)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                💡 SKU will be auto-generated:{' '}
+                {formData.product_type === 'Final'
+                  ? 'P-YYYY-####-####'
+                  : formData.product_type === 'Raw Material'
+                  ? 'R-YYYY-####-####'
+                  : 'M-YYYY-####-####'}
+              </p>
 
-          {/* When the form is submitted, handleSubmit runs */}
-          <form onSubmit={handleSubmit}>
-            <div className="form-row">
-              <div className="form-group">
-                <label>📝 Product Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      name: e.target.value,
-                    })
-                  }
-                  required
-                />
-              </div>
+              {/* When the form is submitted, handleSubmit runs */}
+              <form onSubmit={handleSubmit}>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>📝 Product Name *</label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          name: e.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </div>
 
-              <div className="form-group">
-                <label>🏷️ Product Type *</label>
-                <select
-                  value={formData.product_type}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      product_type: e.target.value,
-                    })
-                  }
-                  required
-                  disabled={!!editingProduct}
-                >
-                  <option value="Final">🪵 Final Product</option>
-                  <option value="Sub-assembly">🔩 Sub-assembly</option>
-                  <option value="Raw Material">🌲 Raw Material</option>
-                </select>
-              </div>
-            </div>
+                  <div className="form-group">
+                    <label>🏷️ Product Type *</label>
+                    <select
+                      value={formData.product_type}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          product_type: e.target.value,
+                        })
+                      }
+                      required
+                      disabled={!!editingProduct}
+                    >
+                      <option value="Final">🪵 Final Product</option>
+                      <option value="Sub-assembly">🔩 Sub-assembly</option>
+                      <option value="Raw Material">🌲 Raw Material</option>
+                    </select>
+                  </div>
+                </div>
 
             <div className="form-group">
               <label>📄 Description</label>
@@ -904,18 +1092,17 @@ function Products() {
                     })
                   }
                 >
-                  <option value="pcs">Pieces</option>
-                  <option value="kg">Kilograms</option>
-                  <option value="m">Meters</option>
-                  <option value="m2">Square Meters</option>
-                  <option value="m3">Cubic Meters</option>
+                  {units.map((unit) => (
+                    <option key={unit} value={unit}>
+                      {unit}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div className="form-group">
                 <label>📂 Category</label>
-                <input
-                  type="text"
+                <select
                   value={formData.category}
                   onChange={(e) =>
                     setFormData({
@@ -923,13 +1110,33 @@ function Products() {
                       category: e.target.value,
                     })
                   }
-                  list="categories"
-                />
-                <datalist id="categories">
+                >
+                  <option value="">Select category...</option>
                   {categories.map((cat) => (
-                    <option key={cat} value={cat} />
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
                   ))}
-                </datalist>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>💱 Currency</label>
+                <select
+                  value={formData.currency_code}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      currency_code: e.target.value,
+                    })
+                  }
+                >
+                  {currencies.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} ({currency.symbol}) - {currency.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -955,117 +1162,7 @@ function Products() {
                   type="number"
                   step="0.01"
                   value={formData.cost}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      cost: parseFloat(e.target.value) || 0,
-                    })
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="form-row">
-              <div className="form-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={formData.is_active}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        is_active: e.target.checked,
-                      })
-                    }
-                  />
-                  {' '}✅ Active
-                </label>
-              </div>
-
-              <div className="form-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={formData.is_tracked}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        is_tracked: e.target.checked,
-                      })
-                    }
-                  />
-                  {' '}📊 Track Inventory
-                </label>
-              </div>
-            </div>
-
-            {/* Ingredients selection section: only if product type is Final */}
-            {formData.product_type === 'Final' && (
-              <div className="card" style={{ marginTop: '1.5rem', backgroundColor: 'rgba(45, 27, 14, 0.5)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <h3>🔩 Ingredients/Materials</h3>
-                  <button type="button" className="btn btn-success" onClick={handleAddFormIngredient}>
-                    ➕ Add Material
-                  </button>
-                </div>
-
-                <p style={{ color: 'var(--brown-200)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-                  💡 Add raw materials (wood, glue, etc.) or sub-assemblies as ingredients.
-                  Only Sub-assembly or Raw Material products can be selected as ingredients.
-                </p>
-
-                {formIngredients.length > 0 &&
-                  formIngredients.map((ing, index) => (
-                    <div
-                      key={index}
-                      style={{
-                        border: '1px solid var(--brown-500)',
-                        padding: '1rem',
-                        marginBottom: '1rem',
-                        borderRadius: '8px',
-                        backgroundColor: 'rgba(45, 27, 14, 0.3)',
-                      }}
-                    >
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>📦 Material/Ingredient *</label>
-                          <select
-                            value={ing.ingredient_id}
-                            onChange={(e) =>
-                              handleFormIngredientChange(index, 'ingredient_id', e.target.value)
-                            }
-                            required
-                          >
-                            <option value="">Select material...</option>
-                            {subAssemblyProducts
-                              .filter((p) => !editingProduct || p.id !== editingProduct.id)
-                              .map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.sku} - {p.name}
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-
-                        <div className="form-group">
-                          <label>🔢 Quantity per Product *</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
-                            value={ing.quantity}
-                            onChange={(e) =>
-                              handleFormIngredientChange(index, 'quantity', e.target.value)
-                            }
-                            required
-                          />
-                        </div>
-
-                        <div className="form-group">
-                          <label>&nbsp;</label>
-                          <button
-                            type="button"
-                            className="btn btn-danger"
+@@ -1069,124 +1416,400 @@ function Products() {
                             onClick={() => handleRemoveFormIngredient(index)}
                             style={{ width: '100%' }}
                           >
@@ -1091,17 +1188,121 @@ function Products() {
               </div>
             )}
 
-            <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button type="submit" className="btn btn-primary">
-                {editingProduct ? '💾 Update' : '✨ Create'} Product
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={resetForm}>
-                ❌ Cancel
-              </button>
+            {/* Emplacements (inventory locations) */}
+            <div className="card" style={{ marginTop: '1.5rem', backgroundColor: 'rgba(45, 27, 14, 0.5)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3>📍 Emplacements (Inventory Locations)</h3>
+                <button type="button" className="btn btn-success" onClick={handleAddFormEmplacement}>
+                  ➕ Add Emplacement
+                </button>
+              </div>
+
+              <p style={{ color: 'var(--brown-200)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                💡 Each emplacement becomes an inventory item for this product (location + quantities).
+                You can add multiple rows if the product is stored in several places.
+              </p>
+
+              {formEmplacements.length > 0 &&
+                formEmplacements.map((emplacement, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      border: '1px solid var(--brown-500)',
+                      padding: '1rem',
+                      marginBottom: '1rem',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(45, 27, 14, 0.3)',
+                    }}
+                  >
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>📍 Location *</label>
+                        <input
+                          type="text"
+                          value={emplacement.location}
+                          onChange={(e) =>
+                            handleFormEmplacementChange(index, 'location', e.target.value)
+                          }
+                          required
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>📦 Qty On Hand</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={emplacement.quantity_on_hand}
+                          onChange={(e) =>
+                            handleFormEmplacementChange(index, 'quantity_on_hand', e.target.value)
+                          }
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>🚨 Reorder Point</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={emplacement.reorder_point}
+                          onChange={(e) =>
+                            handleFormEmplacementChange(index, 'reorder_point', e.target.value)
+                          }
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>🔁 Reorder Qty</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={emplacement.reorder_quantity}
+                          onChange={(e) =>
+                            handleFormEmplacementChange(index, 'reorder_quantity', e.target.value)
+                          }
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>&nbsp;</label>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={() => handleRemoveFormEmplacement(index)}
+                          style={{ width: '100%' }}
+                        >
+                          🗑️ Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+              {formEmplacements.length === 0 && (
+                <p
+                  style={{
+                    textAlign: 'center',
+                    color: 'var(--brown-300)',
+                    padding: '1rem',
+                    fontStyle: 'italic',
+                  }}
+                >
+                  No emplacements added yet. Click "➕ Add Emplacement" to add locations.
+                </p>
+              )}
             </div>
-          </form>
-        </div>
-      )}
+
+                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button type="submit" className="btn btn-primary">
+                    {editingProduct ? '💾 Update' : '✨ Create'} Product
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={resetForm}>
+                    ❌ Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
       {/* =========================
           DETAILS MODAL
@@ -1127,44 +1328,216 @@ function Products() {
                   : '🌲 Raw Material'}
               </p>
               <p><strong>Category:</strong> {selectedProduct.category || 'N/A'}</p>
-              <p><strong>Price:</strong> ${selectedProduct.base_price.toFixed(2)}</p>
-              <p><strong>Cost:</strong> ${selectedProduct.cost.toFixed(2)}</p>
+              <p>
+                <strong>Currency:</strong>{' '}
+                {getCurrencyMeta(selectedProduct.currency_code)?.code ||
+                  selectedProduct.currency_code ||
+                  'USD'}
+              </p>
+              <p>
+                <strong>Price:</strong>{' '}
+                {getCurrencyMeta(selectedProduct.currency_code)?.symbol || '$'}
+                {selectedProduct.base_price.toFixed(2)}
+              </p>
+              <p>
+                <strong>Cost:</strong>{' '}
+                {getCurrencyMeta(selectedProduct.currency_code)?.symbol || '$'}
+                {selectedProduct.cost.toFixed(2)}
+              </p>
             </div>
 
-            <h3>📦 Linked Sales Orders ({linkedOrders.length})</h3>
+            {/* Tabs inside the details modal */}
+            <div className="tabs-container" style={{ marginBottom: '1rem' }}>
+              {DETAILS_TABS.map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setDetailsTab(tab)}
+                  className={`tab-button ${detailsTab === tab ? 'active' : ''}`}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    border: 'none',
+                    background: detailsTab === tab ? 'var(--green-500)' : 'var(--brown-700)',
+                    color: detailsTab === tab ? 'var(--brown-900)' : 'var(--brown-200)',
+                    cursor: 'pointer',
+                    borderRadius: '4px 4px 0 0',
+                    marginRight: '2px',
+                  }}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
 
-            {linkedOrders.length === 0 ? (
-              <p style={{ color: 'var(--brown-200)' }}>No sales orders found for this product.</p>
-            ) : (
-              <table style={{ marginTop: '1rem' }}>
-                <thead>
-                  <tr>
-                    <th>Order Number</th>
-                    <th>Customer</th>
-                    <th>Status</th>
-                    <th>Quantity</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {linkedOrders.map((order) => {
-                    const item = order.items.find((i) => i.product_id === selectedProduct.id)
-                    return item ? (
-                      <tr key={order.id}>
-                        <td>{order.order_number}</td>
-                        <td>{order.customer_name}</td>
-                        <td>
-                          <span className={`status-badge status-${order.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                            {order.status}
-                          </span>
-                        </td>
-                        <td>{item.quantity}</td>
-                        <td>${order.grand_total.toFixed(2)}</td>
+            {/* PO TAB */}
+            {detailsTab === 'POs' && (
+              <>
+                <h3>🛒 Linked Purchase Orders ({linkedPurchaseOrders.length})</h3>
+                {linkedPurchaseOrders.length === 0 ? (
+                  <p style={{ color: 'var(--brown-200)' }}>No purchase orders found for this product.</p>
+                ) : (
+                  <table style={{ marginTop: '1rem' }}>
+                    <thead>
+                      <tr>
+                        <th>PO Number</th>
+                        <th>Supplier</th>
+                        <th>Status</th>
+                        <th>Total</th>
                       </tr>
-                    ) : null
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody>
+                      {linkedPurchaseOrders.map((po) => (
+                        <tr key={po.id}>
+                          <td>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => navigate(`/purchasing?poId=${po.id}`)}
+                              style={{ padding: '0.25rem 0.5rem' }}
+                            >
+                              {po.po_number}
+                            </button>
+                          </td>
+                          <td>{po.supplier?.company_name || '-'}</td>
+                          <td>
+                            <span className={`status-badge status-${po.status.toLowerCase()}`}>
+                              {po.status}
+                            </span>
+                          </td>
+                          <td>
+                            {getCurrencyMeta(selectedProduct.currency_code)?.symbol || '$'}
+                            {po.grand_total?.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            {/* SO TAB */}
+            {detailsTab === 'SOs' && (
+              <>
+                <h3>📦 Linked Sales Orders ({linkedSalesOrders.length})</h3>
+
+                {linkedSalesOrders.length === 0 ? (
+                  <p style={{ color: 'var(--brown-200)' }}>No sales orders found for this product.</p>
+                ) : (
+                  <table style={{ marginTop: '1rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Order Number</th>
+                        <th>Customer</th>
+                        <th>Status</th>
+                        <th>Quantity</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linkedSalesOrders.map((order) => {
+                        const item = order.items.find((i) => i.product_id === selectedProduct.id)
+                        return item ? (
+                          <tr key={order.id}>
+                            <td>
+                              <button
+                                className="btn btn-secondary"
+                                onClick={() => navigate(`/sales-orders?salesOrderId=${order.id}`)}
+                                style={{ padding: '0.25rem 0.5rem' }}
+                              >
+                                {order.order_number}
+                              </button>
+                            </td>
+                            <td>{order.customer_name}</td>
+                            <td>
+                              <span className={`status-badge status-${order.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                                {order.status}
+                              </span>
+                            </td>
+                            <td>{item.quantity}</td>
+                            <td>
+                              {getCurrencyMeta(selectedProduct.currency_code)?.symbol || '$'}
+                              {order.grand_total.toFixed(2)}
+                            </td>
+                          </tr>
+                        ) : null
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            {/* EMPLACEMENTS TAB */}
+            {detailsTab === 'Emplacements' && (
+              <>
+                <h3>📍 Emplacements ({linkedInventoryItems.length})</h3>
+                {linkedInventoryItems.length === 0 ? (
+                  <p style={{ color: 'var(--brown-200)' }}>No emplacements found for this product.</p>
+                ) : (
+                  <table style={{ marginTop: '1rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Location</th>
+                        <th>On Hand</th>
+                        <th>Available</th>
+                        <th>Reorder Point</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linkedInventoryItems.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => navigate(`/inventory?itemId=${item.id}`)}
+                              style={{ padding: '0.25rem 0.5rem' }}
+                            >
+                              {item.location}
+                            </button>
+                          </td>
+                          <td>{item.quantity_on_hand}</td>
+                          <td>{item.quantity_available}</td>
+                          <td>{item.reorder_point}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            {/* TRANSFERS TAB */}
+            {detailsTab === 'Transfers' && (
+              <>
+                <h3>🔁 Transfers ({linkedTransfers.length})</h3>
+                {linkedTransfers.length === 0 ? (
+                  <p style={{ color: 'var(--brown-200)' }}>
+                    No transfer movements found for this product.
+                  </p>
+                ) : (
+                  <table style={{ marginTop: '1rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Movement ID</th>
+                        <th>Inventory Item</th>
+                        <th>Qty</th>
+                        <th>Reference</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linkedTransfers.map((movement) => (
+                        <tr key={movement.id}>
+                          <td>{movement.id}</td>
+                          <td>{movement.inventory_item_id}</td>
+                          <td>{movement.quantity}</td>
+                          <td>{movement.reference_type || 'TRANSFER'}</td>
+                          <td>{new Date(movement.created_at).toLocaleDateString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1190,91 +1563,7 @@ function Products() {
                   <select
                     value={ingredientForm.ingredient_id}
                     onChange={(e) =>
-                      setIngredientForm({
-                        ...ingredientForm,
-                        ingredient_id: e.target.value,
-                      })
-                    }
-                    required
-                  >
-                    <option value="">Choose material...</option>
-                    {subAssemblyProducts
-                      .filter((p) => p.id !== selectedProduct.id)
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.sku} - {p.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Quantity per Product</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={ingredientForm.quantity}
-                    onChange={(e) =>
-                      setIngredientForm({
-                        ...ingredientForm,
-                        quantity: parseFloat(e.target.value) || 1,
-                      })
-                    }
-                    required
-                    min="0.01"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>&nbsp;</label>
-                  <button type="submit" className="btn btn-success">
-                    ➕ Add
-                  </button>
-                </div>
-              </div>
-            </form>
-
-            <h3>Current Ingredients ({ingredients.length})</h3>
-
-            {ingredients.length === 0 ? (
-              <p style={{ color: 'var(--brown-200)' }}>No ingredients added yet.</p>
-            ) : (
-              <table style={{ marginTop: '1rem' }}>
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>Quantity</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ingredients.map((ing) => (
-                    <tr key={ing.id}>
-                      <td>{ing.ingredient?.sku}</td>
-                      <td>{ing.ingredient?.name}</td>
-                      <td>{ing.quantity}</td>
-                      <td>
-                        <button className="btn btn-danger" onClick={() => handleRemoveIngredient(ing.id)}>
-                          🗑️ Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* =========================
-          PRODUCTS TABLE CARD
-          ========================= */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2>📦 Product List ({totalItems})</h2>
-          <button className="btn btn-secondary" onClick={refreshTable} title="Refresh Table Only">
+@@ -1278,59 +1901,81 @@ function Products() {
             🔄 Refresh Table
           </button>
         </div>
@@ -1301,14 +1590,36 @@ function Products() {
                 { key: 'category', label: 'Category', render: (value) => value || '-' },
                 { key: 'unit_of_measure', label: 'Unit' },
                 {
+                  key: 'currency_code',
+                  label: 'Currency',
+                  render: (value) => getCurrencyMeta(value)?.code || value || 'USD',
+                },
+                {
+                  key: 'emplacements',
+                  label: 'Emplacements',
+                  sortable: false,
+                  render: (_, row) => {
+                    const locations = (inventoryByProduct[row.id] || []).map(
+                      (item) => item.location
+                    )
+                    return locations.length > 0 ? locations.join(', ') : '-'
+                  },
+                },
+                {
                   key: 'base_price',
                   label: 'Price',
-                  render: (value) => `$${parseFloat(value || 0).toFixed(2)}`,
+                  render: (value, row) => {
+                    const symbol = getCurrencyMeta(row.currency_code)?.symbol || '$'
+                    return `${symbol}${parseFloat(value || 0).toFixed(2)}`
+                  },
                 },
                 {
                   key: 'cost',
                   label: 'Cost',
-                  render: (value) => `$${parseFloat(value || 0).toFixed(2)}`,
+                  render: (value, row) => {
+                    const symbol = getCurrencyMeta(row.currency_code)?.symbol || '$'
+                    return `${symbol}${parseFloat(value || 0).toFixed(2)}`
+                  },
                 },
                 {
                   key: 'is_active',
@@ -1334,28 +1645,7 @@ function Products() {
                         🔩
                       </button>
 
-                      <button
-                        className="btn btn-info"
-                        onClick={() => handleViewDetails(row)}
-                        title="View Details"
-                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
-                      >
-                        📋
-                      </button>
-
-                      {canUpdate && (
-                        <button
-                          className="btn btn-primary"
-                          onClick={() => handleEdit(row)}
-                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
-                        >
-                          ✏️
-                        </button>
-                      )}
-
-                      {canDelete && (
-                        <button
-                          className="btn btn-danger"
+@@ -1359,39 +2004,227 @@ function Products() {
                           onClick={() => handleDelete(row.id)}
                           style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
                         >
@@ -1381,6 +1671,194 @@ function Products() {
           </>
         )}
       </div>
+        </>
+      )}
+
+      {/* =========================
+          CATEGORIES TAB
+          ========================= */}
+      {activeTab === 'Categories' && (
+        <div className="card">
+          <h2>📂 Product Categories</h2>
+          <p style={{ color: 'var(--brown-200)', marginBottom: '1rem' }}>
+            💡 Add categories here, then select them in the Products form.
+          </p>
+
+          <div className="form-row">
+            <div className="form-group" style={{ flex: 2 }}>
+              <label>New Category</label>
+              <input
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="e.g., Furniture, Hardware, Finishes"
+              />
+            </div>
+            <div className="form-group" style={{ alignSelf: 'flex-end' }}>
+              <button className="btn btn-success" onClick={handleAddCategory}>
+                ➕ Add Category
+              </button>
+            </div>
+          </div>
+
+          {categories.length === 0 ? (
+            <p style={{ color: 'var(--brown-200)' }}>No categories yet.</p>
+          ) : (
+            <table style={{ marginTop: '1rem' }}>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((cat) => (
+                  <tr key={cat}>
+                    <td>{cat}</td>
+                    <td>
+                      <button className="btn btn-danger" onClick={() => handleRemoveCategory(cat)}>
+                        🗑️ Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* =========================
+          UNITS TAB
+          ========================= */}
+      {activeTab === 'Units' && (
+        <div className="card">
+          <h2>📏 Units of Measure</h2>
+          <p style={{ color: 'var(--brown-200)', marginBottom: '1rem' }}>
+            💡 Add units here, then select them in the Products form.
+          </p>
+
+          <div className="form-row">
+            <div className="form-group" style={{ flex: 2 }}>
+              <label>New Unit</label>
+              <input
+                type="text"
+                value={newUnitName}
+                onChange={(e) => setNewUnitName(e.target.value)}
+                placeholder="e.g., pcs, kg, box, liters"
+              />
+            </div>
+            <div className="form-group" style={{ alignSelf: 'flex-end' }}>
+              <button className="btn btn-success" onClick={handleAddUnit}>
+                ➕ Add Unit
+              </button>
+            </div>
+          </div>
+
+          {units.length === 0 ? (
+            <p style={{ color: 'var(--brown-200)' }}>No units yet.</p>
+          ) : (
+            <table style={{ marginTop: '1rem' }}>
+              <thead>
+                <tr>
+                  <th>Unit</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {units.map((unit) => (
+                  <tr key={unit}>
+                    <td>{unit}</td>
+                    <td>
+                      <button className="btn btn-danger" onClick={() => handleRemoveUnit(unit)}>
+                        🗑️ Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* =========================
+          CURRENCIES TAB
+          ========================= */}
+      {activeTab === 'Currencies' && (
+        <div className="card">
+          <h2>💱 Currencies</h2>
+          <p style={{ color: 'var(--brown-200)', marginBottom: '1rem' }}>
+            💡 Add currencies here, then select them in the Products form.
+          </p>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Code</label>
+              <input
+                type="text"
+                value={newCurrencyCode}
+                onChange={(e) => setNewCurrencyCode(e.target.value)}
+                placeholder="USD"
+                maxLength={5}
+              />
+            </div>
+            <div className="form-group">
+              <label>Symbol</label>
+              <input
+                type="text"
+                value={newCurrencySymbol}
+                onChange={(e) => setNewCurrencySymbol(e.target.value)}
+                placeholder="$"
+                maxLength={3}
+              />
+            </div>
+            <div className="form-group" style={{ flex: 2 }}>
+              <label>Name</label>
+              <input
+                type="text"
+                value={newCurrencyName}
+                onChange={(e) => setNewCurrencyName(e.target.value)}
+                placeholder="US Dollar"
+              />
+            </div>
+            <div className="form-group" style={{ alignSelf: 'flex-end' }}>
+              <button className="btn btn-success" onClick={handleAddCurrency}>
+                ➕ Add Currency
+              </button>
+            </div>
+          </div>
+
+          {currencies.length === 0 ? (
+            <p style={{ color: 'var(--brown-200)' }}>No currencies yet.</p>
+          ) : (
+            <table style={{ marginTop: '1rem' }}>
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Symbol</th>
+                  <th>Name</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currencies.map((currency) => (
+                  <tr key={currency.code}>
+                    <td>{currency.code}</td>
+                    <td>{currency.symbol}</td>
+                    <td>{currency.name}</td>
+                    <td>
+                      <button className="btn btn-danger" onClick={() => handleRemoveCurrency(currency.code)}>
+                        🗑️ Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   )
 }
