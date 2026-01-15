@@ -7,7 +7,6 @@ import { useAuth, RequireAuth } from './contexts/AuthContext'
 // Lazy load pages for code splitting (loads only when needed)
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Products = lazy(() => import('./pages/Products'))
-const Inventory = lazy(() => import('./pages/Inventory'))
 const SalesOrders = lazy(() => import('./pages/SalesOrders'))
 const Customers = lazy(() => import('./pages/Customers'))
 const Quotes = lazy(() => import('./pages/Quotes'))
@@ -59,7 +58,6 @@ const PageLoader = () => (
 const ALL_PAGES = [
   { path: '/', name: '📊 Dashboard', icon: '📊' },
   { path: '/products', name: '📦 Products', icon: '📦' },
-  { path: '/inventory', name: '📊 Inventory', icon: '📊' },
   { path: '/leads', name: '🎯 Leads', icon: '🎯' },
   { path: '/quotes', name: '💰 Quotes', icon: '💰' },
   { path: '/sales-orders', name: '📋 Sales Orders', icon: '📋' },
@@ -216,7 +214,6 @@ function App() {
 
             <Route path="/" element={<RequireAuth permission="reporting.view"><Dashboard /></RequireAuth>} />
             <Route path="/products" element={<RequireAuth permission="products.view"><Products /></RequireAuth>} />
-            <Route path="/inventory" element={<RequireAuth permission="inventory.view"><Inventory /></RequireAuth>} />
             <Route path="/quotes" element={<RequireAuth permission="quotes.view"><Quotes /></RequireAuth>} />
             <Route path="/sales-orders" element={<RequireAuth permission="sales_orders.view"><SalesOrders /></RequireAuth>} />
             <Route path="/invoicing" element={<RequireAuth permission="invoicing.view"><Invoicing /></RequireAuth>} />
