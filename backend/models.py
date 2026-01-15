@@ -13,6 +13,7 @@ class Product(Base):
     description = Column(Text, nullable=True)
     unit_of_measure = Column(String(20), default="pcs")  # pcs, kg, m, etc.
     category = Column(String(100), nullable=True)
+    currency_code = Column(String(10), default="USD")  # ISO currency code (USD, EUR, etc.)
     
     # Product type: Final, Sub-assembly, or Raw Material
     product_type = Column(String(50), default="Final")  # Final, Sub-assembly, Raw Material
