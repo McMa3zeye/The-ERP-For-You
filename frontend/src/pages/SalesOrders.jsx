@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { salesOrdersAPI, productsAPI, customersAPI } from '../services/api'
 import Pagination from '../components/Pagination'
 import SortableTable from '../components/SortableTable'
@@ -19,12 +20,17 @@ const STATUSES = [
 ]
 
 function SalesOrders() {
+  // Query params allow us to open a specific sales order from another page.
+  const [searchParams, setSearchParams] = useSearchParams()
+
   const [orders, setOrders] = useState([])
   const [products, setProducts] = useState([])
   const [customers, setCustomers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showCustomerForm, setShowCustomerForm] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
+  const [selectedOrder, setSelectedOrder] = useState(null)
   const [alert, setAlert] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const debouncedSearchTerm = useDebounce(searchTerm, 500) // 500ms debounce
@@ -73,6 +79,30 @@ function SalesOrders() {
     loadProductsOnce()
   }, [])
 
+  const showAlert = useCallback((message, type = 'success') => {
+    setAlert({ message, type })
+    const timeoutId = setTimeout(() => setAlert(null), 4000)
+    return () => clearTimeout(timeoutId)
+  }, [])
+
+  // If we land on this page with ?salesOrderId=123, load that order and open the modal.
+  useEffect(() => {
+    const salesOrderId = searchParams.get('salesOrderId')
+    if (!salesOrderId) return
+
+    const loadOrder = async () => {
+      try {
+        const response = await salesOrdersAPI.getById(salesOrderId)
+        setSelectedOrder(response.data)
+        setShowDetails(true)
+      } catch (error) {
+        showAlert('Error loading sales order: ' + error.message, 'error')
+      }
+    }
+
+    loadOrder()
+  }, [searchParams, showAlert])
+
   // Reset to page 1 when filters/search change
   useEffect(() => {
     setCurrentPage(1)
@@ -117,12 +147,6 @@ function SalesOrders() {
     loadData(currentPage, true) // Skip loading spinner
   }, [currentPage])
 
-  const showAlert = useCallback((message, type = 'success') => {
-    setAlert({ message, type })
-    const timeoutId = setTimeout(() => setAlert(null), 4000)
-    return () => clearTimeout(timeoutId)
-  }, [])
-
   const getNextStatus = (currentStatus) => {
     const idx = STATUSES.indexOf(currentStatus)
     if (idx === -1 || idx === STATUSES.length - 1) return null
@@ -148,118 +172,7 @@ function SalesOrders() {
                             parseFloat(value) || 0 : value
     
     // Auto-fill price when product is selected
-    if (field === 'product_id' && value) {
-      const product = products.find(p => p.id === parseInt(value))
-      if (product) {
-        newItems[index].unit_price = product.base_price
-      }
-    }
-    
-    setFormData({ ...formData, items: newItems })
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!formData.customer_id && !formData.customer_name) {
-      showAlert('⚠️ Please select a customer or enter customer name', 'error')
-      return
-    }
-    if (formData.items.length === 0) {
-      showAlert('⚠️ Please add at least one item', 'error')
-      return
-    }
-    
-    try {
-      // Prepare order data - use customer_id if available, otherwise use customer_name
-      const orderData = {
-        ...formData,
-        customer_id: formData.customer_id ? parseInt(formData.customer_id) : null,
-        customer_name: formData.customer_id ? undefined : formData.customer_name, // Only send customer_name if no customer_id
-      }
-      await salesOrdersAPI.create(orderData)
-      showAlert('✅ Sales order created successfully! Order number auto-generated.')
-      resetForm()
-      loadData()
-      // Reload customers to get any new ones
-      const response = await customersAPI.getAll({ limit: 100 })
-      const customerList = Array.isArray(response.data) ? response.data : (response.data.items || [])
-      setCustomers(customerList)
-    } catch (error) {
-      showAlert('⚠️ Error: ' + (error.response?.data?.detail || error.message), 'error')
-    }
-  }
-
-  const handleCreateCustomer = async (e) => {
-    e.preventDefault()
-    try {
-      const response = await customersAPI.create(customerFormData)
-      showAlert('✅ Customer created successfully!')
-      // Add to local customers list
-      setCustomers([...customers, response.data])
-      // Pre-select the new customer
-      setFormData({ ...formData, customer_id: response.data.id.toString() })
-      resetCustomerForm()
-    } catch (error) {
-      showAlert('⚠️ Error creating customer: ' + (error.response?.data?.detail || error.message), 'error')
-    }
-  }
-
-  const handleCustomerSelect = (customerId) => {
-    const selectedCustomer = customers.find(c => c.id === parseInt(customerId))
-    if (selectedCustomer) {
-      setFormData({
-        ...formData,
-        customer_id: customerId,
-        customer_name: selectedCustomer.company_name,
-        customer_email: selectedCustomer.email || '',
-        customer_address: selectedCustomer.address || '',
-      })
-    } else {
-      setFormData({
-        ...formData,
-        customer_id: '',
-        customer_name: '',
-        customer_email: '',
-        customer_address: '',
-      })
-    }
-  }
-
-  const resetCustomerForm = () => {
-    setCustomerFormData({
-      company_name: '',
-      email: '',
-      phone: '',
-      address: '',
-      siret: '',
-      contact_name: '',
-      commentary: '',
-    })
-    setShowCustomerForm(false)
-  }
-
-  const handleNextStatus = async (orderId) => {
-    const order = orders.find(o => o.id === orderId)
-    const nextStatus = getNextStatus(order?.status)
-    
-    if (!nextStatus) {
-      showAlert('⚠️ Order is already at final status', 'warning')
-      return
-    }
-    
-    if (!window.confirm(`➡️ Move order to "${nextStatus}"?${nextStatus === 'Ready for Production' ? '\n\n⚠️ This will deduct materials from inventory!' : ''}`)) return
-    
-    try {
-      await salesOrdersAPI.nextStatus(orderId)
-      showAlert(`✅ Order status updated to "${nextStatus}"!${nextStatus === 'Ready for Production' ? ' Materials deducted.' : ''}`)
-      loadData()
-    } catch (error) {
-      showAlert('⚠️ Error: ' + (error.response?.data?.detail || error.message), 'error')
-    }
-  }
-
-  const handleDelete = async (orderId) => {
-    if (!window.confirm('⚠️ Are you sure you want to delete this order?')) return
+@@ -263,82 +287,136 @@ function SalesOrders() {
     
     try {
       await salesOrdersAPI.delete(orderId)
@@ -283,6 +196,15 @@ function SalesOrders() {
       items: [{ product_id: '', quantity: 1, unit_price: 0, discount_percent: 0 }],
     })
     setShowForm(false)
+  }
+
+  // Close the sales order details modal and clear the URL param.
+  const closeDetails = () => {
+    setShowDetails(false)
+    setSelectedOrder(null)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('salesOrderId')
+    setSearchParams(nextParams)
   }
 
   const getStatusBadgeClass = (status) => {
@@ -314,6 +236,51 @@ function SalesOrders() {
       {alert && (
         <div className={`alert alert-${alert.type === 'error' ? 'error' : alert.type === 'warning' ? 'warning' : 'success'}`}>
           {alert.message}
+        </div>
+      )}
+
+      {/* Sales Order Details Modal */}
+      {showDetails && selectedOrder && (
+        <div className="modal-overlay" onClick={closeDetails}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>🧾 Sales Order {selectedOrder.order_number}</h2>
+              <button className="btn btn-secondary" onClick={closeDetails}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Customer:</strong> {selectedOrder.customer_name || '-'}</p>
+              <p><strong>Status:</strong> {selectedOrder.status}</p>
+              <p><strong>Order Date:</strong> {new Date(selectedOrder.order_date).toLocaleDateString()}</p>
+              <p><strong>Total:</strong> ${selectedOrder.grand_total?.toFixed(2)}</p>
+            </div>
+
+            <h3 style={{ marginTop: '1rem' }}>Items</h3>
+            <table style={{ marginTop: '0.5rem' }}>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Product</th>
+                  <th>Qty</th>
+                  <th>Unit Price</th>
+                  <th>Line Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedOrder.items?.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.product?.sku || '-'}</td>
+                    <td>{item.product?.name || '-'}</td>
+                    <td>{item.quantity}</td>
+                    <td>${item.unit_price?.toFixed(2)}</td>
+                    <td>${item.line_total?.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
